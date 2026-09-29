@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snoboard.fullname" . }}
+  labels:
+    {{- include "snoboard.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "snoboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "snoboard.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: snoboard
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: HOST
+              value: "0.0.0.0"
+            - name: HOME
+              value: /tmp
+            - name: SNOBOARD_DATA_DIR
+              value: {{ .Values.dataDir | quote }}
+            {{- range $key, $value := .Values.env }}
+            {{- if ne (toString $value) "" }}
+            - name: {{ $key }}
+              value: {{ $value | toString | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.existingSecret }}
+            {{- range $envName, $key := .Values.secretFiles }}
+            - name: {{ $envName }}
+              value: {{ printf "%s/%s" $.Values.secretMountPath $key | quote }}
+            {{- end }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.dataDir | quote }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.existingSecret }}
+            - name: secrets
+              mountPath: {{ .Values.secretMountPath | quote }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.existingSecret }}
+        - name: secrets
+          secret:
+            secretName: {{ .Values.existingSecret | quote }}
+            defaultMode: 0444
+            items:
+              {{- range $envName, $key := .Values.secretFiles }}
+              - key: {{ $key | quote }}
+                path: {{ $key | quote }}
+              {{- end }}
+        {{- end }}

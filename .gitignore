@@ -1,0 +1,14 @@
+node_modules
+dist
+.vike
+coverage
+test-results
+playwright-report
+blob-report
+
+# Root .gitignore ignores every `packages/` directory (NuGet). Re-include this
+# workspace, then hide install and build output again.
+!packages/
+!packages/**
+packages/**/node_modules/
+packages/**/dist/

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: snoboard
+description: Read-only board for git-native initiative documents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0"
+home: https://github.com/serrnovik/snoboard
+sources:
+  - https://github.com/serrnovik/snoboard

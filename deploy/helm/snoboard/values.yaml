@@ -1,0 +1,81 @@
+# Default values for the Snoboard chart.
+# Install notes: docs/deploy.md. Auth setup: docs/auth.md.
+
+# Container image. tag empty uses Chart.appVersion (the release version, not "latest").
+image:
+  repository: ghcr.io/serrnovik/snoboard
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# One replica. Each pod keeps its own clone on an emptyDir.
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  # Also published as PORT inside the container.
+  port: 8080
+
+# Writable clone directory. Mounted from an emptyDir because the root filesystem is read-only.
+dataDir: /var/lib/snoboard
+
+# Plain environment. Empty values are omitted.
+# Secret material is not set here; mount it with existingSecret (every *_FILE variable).
+env:
+  # Git URL the board clones. Required for /readyz to become ready.
+  SNOBOARD_REPO_URL: ""
+  # Seconds between fetches. Default in the app is 120.
+  SNOBOARD_REFRESH_SECONDS: "120"
+  # Optional path to a config file. Empty uses .snoboard.yml from the cloned repository.
+  SNOBOARD_CONFIG_PATH: ""
+  # Comma-separated: password, github, none.
+  SNOBOARD_AUTH_MODES: password
+  # Must be "true" before "none" is allowed. Use none only behind a trusted proxy.
+  SNOBOARD_AUTH_ALLOW_NONE: "false"
+  # Public origin, including scheme, with no trailing path. Used for cookies and the OAuth callback.
+  SNOBOARD_PUBLIC_URL: ""
+  # GitHub OAuth app client id. The client secret is a file, not this value.
+  SNOBOARD_GITHUB_CLIENT_ID: ""
+  # Comma-separated GitHub logins allowed to sign in.
+  SNOBOARD_ALLOWED_GITHUB_LOGINS: ""
+  # Comma-separated GitHub organizations. Membership requires the read:org scope.
+  SNOBOARD_ALLOWED_GITHUB_ORGS: ""
+
+# Name of a Secret to mount as files. Leave empty to skip the mount.
+# The Secret must contain every key listed in secretFiles.
+existingSecret: ""
+
+# Directory where secret files appear inside the container.
+secretMountPath: /var/run/secrets/snoboard
+
+# Env var -> key inside existingSecret. The chart sets the env var to <secretMountPath>/<key>.
+secretFiles:
+  SNOBOARD_SSH_KEY_FILE: ssh-key
+  SNOBOARD_GIT_TOKEN_FILE: git-token
+  SNOBOARD_SESSION_SECRET_FILE: session-secret
+  SNOBOARD_PASSWORD_HASH_FILE: password-hash
+  SNOBOARD_GITHUB_CLIENT_SECRET_FILE: github-client-secret
+  SNOBOARD_GITHUB_TOKEN_FILE: github-token
+
+# requests: 100m CPU / 128Mi memory. memory limit: 256Mi.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+# Optional Ingress. Disabled until enabled is true.
+# Liveness is GET /healthz and readiness is GET /readyz on the service port.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: board.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: board-tls
+  #   hosts:
+  #     - board.example.com

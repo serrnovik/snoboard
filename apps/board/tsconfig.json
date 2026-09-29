@@ -1,0 +1,31 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "snoboard": ["../../packages/core/src/index.ts"],
+      "snoboard/browser": ["../../packages/core/src/browser.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "pages/**/*.ts",
+    "pages/**/*.tsx",
+    "server/**/*.ts",
+    "+server.ts",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "e2e/**/*.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
+}

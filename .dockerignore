@@ -1,0 +1,13 @@
+.git
+.github
+deploy
+docs
+examples
+tests
+**/node_modules
+**/dist
+**/.vike
+**/coverage
+**/*.test.ts
+*.md
+!packages/core/src/templates/**

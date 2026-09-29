@@ -1,0 +1,3 @@
+# Keep LF everywhere so the public repo and shebang lines stay portable.
+* text=auto eol=lf
+*.png binary

@@ -1,0 +1,23 @@
+.snoboard-graph .react-flow {
+  --xy-background-color: var(--background);
+  --xy-background-pattern-dots-color: var(--border);
+  --xy-background-pattern-lines-color: var(--border);
+  --xy-background-pattern-cross-color: var(--border);
+  --xy-node-color: var(--card-foreground);
+  --xy-node-background-color: var(--card);
+  --xy-node-border: 1px solid var(--border);
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-stroke-selected: var(--foreground);
+  --xy-handle-background-color: var(--foreground);
+  --xy-handle-border-color: var(--background);
+  --xy-attribution-background-color: var(--card);
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-node-background-color: var(--muted);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  background-color: var(--background);
+  color: var(--foreground);
+}
