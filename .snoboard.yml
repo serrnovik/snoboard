@@ -1,0 +1,6 @@
+# This repository tracks its own roadmap with Snoboard (a live demo).
+root: initiatives
+branchPatterns: ["initiative/*"]
+forge:
+  type: github
+  repo: serrnovik/snoboard
