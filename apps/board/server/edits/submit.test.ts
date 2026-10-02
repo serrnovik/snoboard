@@ -323,10 +323,13 @@ describe("POST /api/edits/submit", () => {
       "initiatives/acme/alpha/initiative.md",
       "initiatives\\acme\\001-alpha\\initiative.md",
       "/initiatives/acme/001-alpha/initiative.md",
+      "initiatives/-acme/001-alpha/initiative.md",
     ]) {
       expect(isEditablePath(bad, config), bad).toBe(false);
     }
     expect(isEditablePath(ALPHA, config)).toBe(true);
+    // Underscore-led projects (e.g. _shared) are valid ids in the core schema.
+    expect(isEditablePath("initiatives/_shared/005-agents/initiative.md", config)).toBe(true);
   });
 
   it("refuses a symlink or redirected file at the target head", async () => {

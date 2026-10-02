@@ -103,7 +103,7 @@ type FlagValues = {
   help?: boolean;
 };
 
-const PROJECT_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+const PROJECT_NAME = /^[a-z0-9_][a-z0-9_-]*$/;
 const SLUG_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const FOLDER_NUMBER = /^(\d{3})-/;
 

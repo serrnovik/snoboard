@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { resetAccessKeyCache, startAccessCertRefresh, stopAccessCertRefresh } from "./cloudflare-access.js";
 
 export type AuthMode = "password" | "github" | "none" | "cloudflare-access";
@@ -42,7 +43,20 @@ export type AuthConfig = {
    * Never a sign-in method.
    */
   githubWriteConnect?: boolean;
+  /** How long a GitHub write token is kept (`SNOBOARD_GITHUB_WRITE_TOKEN_TTL`). Never past the session. */
+  writeTokenTtlMs?: number;
+  /** Where write tokens live (`SNOBOARD_GITHUB_WRITE_TOKEN_STORE`). Default memory. */
+  writeTokenStore?: WriteTokenStoreConfig;
+  /** GitHub sign-in asks for the write scope up front and keeps that token as the write token. */
+  githubLoginRequestsWrite?: boolean;
 };
+
+export type WriteTokenStoreConfig = { kind: "memory" } | { kind: "encrypted-file"; filePath: string };
+
+export const DEFAULT_WRITE_TOKEN_TTL_MS = 60 * 60 * 1000;
+export const MAX_WRITE_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const MIN_WRITE_TOKEN_TTL_MS = 60 * 1000;
+export const WRITE_TOKEN_FILE_NAME = "github-write-tokens.enc";
 
 const MODE_VALUES = new Set<AuthMode>(["password", "github", "none", "cloudflare-access"]);
 const TEAM_DOMAIN_PATTERN =
@@ -98,11 +112,17 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
     if (env.SNOBOARD_AUTH_ALLOW_NONE?.trim() !== "true") {
       invalid("SNOBOARD_AUTH_ALLOW_NONE must be true when none is configured");
     }
+    rejectLoginRequestsWrite(env);
+    readWriteTokenSettings(env, false);
     return { modes, publicUrl: optionalPublicUrl(env.SNOBOARD_PUBLIC_URL) };
   }
   if (modes.includes("cloudflare-access")) {
     const cloudflareAccess = readCloudflareAccess(env);
-    if (!flagOn(env.SNOBOARD_GITHUB_WRITE_CONNECT, "SNOBOARD_GITHUB_WRITE_CONNECT")) return { modes, cloudflareAccess };
+    rejectLoginRequestsWrite(env);
+    if (!flagOn(env.SNOBOARD_GITHUB_WRITE_CONNECT, "SNOBOARD_GITHUB_WRITE_CONNECT")) {
+      readWriteTokenSettings(env, false);
+      return { modes, cloudflareAccess };
+    }
     // Write-connect needs a callback URL, a key for the signed OAuth state and the
     // encrypted token store, and the OAuth client. Without a secret file the key is
     // random per process (tokens are in memory anyway; a restart means reconnect).
@@ -113,7 +133,9 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
         ? readSecret(secretFile, "SNOBOARD_SESSION_SECRET_FILE")
         : randomBytes(32);
     const github = readGithub(env, "write-connect");
-    return { modes, cloudflareAccess, publicUrl, sessionSecret, github, githubWriteConnect: true };
+    // A per-process random key cannot open a token file after a restart: refuse the file store without a secret file.
+    const tokens = readWriteTokenSettings(env, secretFile !== undefined && secretFile.trim() !== "");
+    return { modes, cloudflareAccess, publicUrl, sessionSecret, github, githubWriteConnect: true, ...tokens };
   }
   if (flagOn(env.SNOBOARD_GITHUB_WRITE_CONNECT, "SNOBOARD_GITHUB_WRITE_CONNECT")) {
     invalid("SNOBOARD_GITHUB_WRITE_CONNECT is only for cloudflare-access; GitHub sign-in already connects write access");
@@ -124,7 +146,19 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
   const sessionSecret = needsSession ? readSecret(env.SNOBOARD_SESSION_SECRET_FILE, "SNOBOARD_SESSION_SECRET_FILE") : undefined;
   const passwordHash = modes.includes("password") ? readPasswordHash(env.SNOBOARD_PASSWORD_HASH_FILE) : undefined;
   const github = modes.includes("github") ? readGithub(env) : undefined;
-  return { modes, publicUrl, sessionSecret, passwordHash, github };
+  const tokens = readWriteTokenSettings(env, sessionSecret !== undefined);
+  if (!modes.includes("github")) rejectLoginRequestsWrite(env);
+  const githubLoginRequestsWrite =
+    github !== undefined && flagOn(env.SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE, "SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE");
+  return {
+    modes,
+    publicUrl,
+    sessionSecret,
+    passwordHash,
+    github,
+    ...tokens,
+    ...(githubLoginRequestsWrite ? { githubLoginRequestsWrite: true } : {}),
+  };
 }
 
 export function isArgon2idHash(value: string): boolean {
@@ -180,6 +214,43 @@ function requirePublicUrl(value: string | undefined): string {
     invalid("SNOBOARD_PUBLIC_URL must not include credentials");
   }
   return url.origin;
+}
+
+/**
+ * `SNOBOARD_GITHUB_WRITE_TOKEN_TTL`: `<n>s`, `<n>m` or `<n>h` (or bare seconds), 1m to 12h. Default 1h.
+ */
+export function parseWriteTokenTtl(value: string | undefined): number {
+  const raw = value?.trim().toLowerCase() ?? "";
+  if (raw === "") return DEFAULT_WRITE_TOKEN_TTL_MS;
+  const match = /^(\d{1,6})([smh]?)$/.exec(raw);
+  if (match === null) invalid("SNOBOARD_GITHUB_WRITE_TOKEN_TTL must look like 30m, 8h or 3600");
+  const unit = match[2] === "h" ? 3_600_000 : match[2] === "m" ? 60_000 : 1000;
+  const ms = Number(match[1]) * unit;
+  if (ms < MIN_WRITE_TOKEN_TTL_MS) invalid("SNOBOARD_GITHUB_WRITE_TOKEN_TTL must be at least 1m");
+  if (ms > MAX_WRITE_TOKEN_TTL_MS) invalid("SNOBOARD_GITHUB_WRITE_TOKEN_TTL must be at most 12h");
+  return ms;
+}
+
+function readWriteTokenSettings(
+  env: NodeJS.ProcessEnv,
+  hasSessionSecretFile: boolean,
+): { writeTokenTtlMs?: number; writeTokenStore?: WriteTokenStoreConfig } {
+  const ttl = parseWriteTokenTtl(env.SNOBOARD_GITHUB_WRITE_TOKEN_TTL);
+  const kind = env.SNOBOARD_GITHUB_WRITE_TOKEN_STORE?.trim().toLowerCase() ?? "";
+  const ttlPart = ttl === DEFAULT_WRITE_TOKEN_TTL_MS ? {} : { writeTokenTtlMs: ttl };
+  if (kind === "" || kind === "memory") return ttlPart;
+  if (kind !== "encrypted-file") invalid("SNOBOARD_GITHUB_WRITE_TOKEN_STORE must be memory or encrypted-file");
+  if (!hasSessionSecretFile) {
+    invalid("SNOBOARD_GITHUB_WRITE_TOKEN_STORE=encrypted-file needs SNOBOARD_SESSION_SECRET_FILE (the file key derives from it)");
+  }
+  const dataDir = env.SNOBOARD_DATA_DIR?.trim() || "/tmp/snoboard";
+  return { ...ttlPart, writeTokenStore: { kind: "encrypted-file", filePath: path.join(dataDir, WRITE_TOKEN_FILE_NAME) } };
+}
+
+function rejectLoginRequestsWrite(env: NodeJS.ProcessEnv): void {
+  if (flagOn(env.SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE, "SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE")) {
+    invalid("SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE needs the github auth mode");
+  }
 }
 
 function readPasswordHash(filePath: string | undefined): string {

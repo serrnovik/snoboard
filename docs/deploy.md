@@ -23,9 +23,13 @@ The image includes `git` and `openssh-client`, runs as uid/gid 10001, and does n
 | `SNOBOARD_GITHUB_CLIENT_ID` or `SNOBOARD_GITHUB_CLIENT_ID_FILE` | for `github` | OAuth app client id (value, or a file holding it) |
 | `SNOBOARD_GITHUB_CLIENT_SECRET_FILE` | for `github` | Path to the OAuth client secret |
 | `SNOBOARD_GITHUB_WRITE_CONNECT` | no | `true` on a `cloudflare-access` board: use the OAuth client only to connect each person's GitHub write token at submit. Needs `SNOBOARD_PUBLIC_URL` and the client id/secret. See [auth.md](auth.md#connect-github-at-submit-cloudflare-access) |
+| `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` | no | Write token lifetime: `30m`, `8h`, or seconds. Default `1h`, max `12h`, never past the session. See [auth.md](auth.md#write-token-lifetime-and-storage) |
+| `SNOBOARD_GITHUB_WRITE_TOKEN_STORE` | no | `memory` (default) or `encrypted-file` (`<SNOBOARD_DATA_DIR>/github-write-tokens.enc`, survives restarts; needs `SNOBOARD_SESSION_SECRET_FILE`) |
+| `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE` | no | `true` (`github` mode): sign-in also asks for the write scope; one consent, no separate connect |
 | `SNOBOARD_ALLOWED_GITHUB_LOGINS` | no | Comma-separated GitHub logins |
 | `SNOBOARD_ALLOWED_GITHUB_ORGS` | no | Comma-separated GitHub organizations |
 | `SNOBOARD_GITHUB_TOKEN_FILE` | no | Path to a read-only token for pull request and check status |
+| `SNOBOARD_BOT_AUTHORS` | no | Comma list of extra bot name/email substrings, merged with the built-in list (`[bot]`, `claude`, `codex`, `woodpecker ci`, ...), left out of an initiative's creator and participants |
 | `PORT` | no | HTTP port. Default 8080 |
 
 Every `*_FILE` variable is a path. The file contents are the secret. Do not put secrets in the other variables or in the image.

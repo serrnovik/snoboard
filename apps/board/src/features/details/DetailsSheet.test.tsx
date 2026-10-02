@@ -4,6 +4,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserLocation } from "@/features/board/sync";
 import { DetailsSheet, InitiativePage } from "./DetailsSheet";
+import { publishBoardView } from "@/features/board/view-store";
+import userEvent from "@testing-library/user-event";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -149,5 +151,55 @@ describe("initiative details", () => {
     }
     const images = [...document.querySelectorAll("[data-testid=details-sheet] img")].map((img) => img.getAttribute("src"));
     expect(images).toEqual(["/api/repos/default/initiatives/acme-002/assets/flow.png"]);
+  });
+});
+
+describe("basket-aware details, people and back navigation", () => {
+  afterEach(() => publishBoardView(null));
+
+  it("shows the effective blocked state with a pending marker and the people", async () => {
+    const committed = { ...details(), status: "planned", depends_on: ["acme-001"], isReady: false, blockedBy: ["acme-001"] };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(committed)));
+    publishBoardView({
+      items: new Map([
+        [
+          "acme-002",
+          {
+            ...committed,
+            isReady: true,
+            blockedBy: [],
+            committed: { status: "planned", isReady: false, blockedBy: ["acme-001"] },
+          },
+        ],
+      ]),
+      people: {
+        "acme-002": {
+          creator: { key: "login:octo", name: "octo", login: "octo", date: "2026-09-01T00:00:00Z" },
+          participants: [{ key: "email:ann@x", name: "Ann Lee" }],
+        },
+      },
+    });
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    const readiness = await screen.findByTestId("readiness");
+    expect(readiness.textContent).toBe("Ready (pending)");
+    expect(screen.queryByText(/Blocked by/)).toBeNull();
+    expect(screen.getByTestId("creator").textContent).toContain("Created by octo");
+    expect(screen.getByTestId("participants").textContent).toContain("Ann Lee");
+  });
+
+  it("falls back to the committed blockers without a board view", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ...details(), depends_on: ["acme-001"], isReady: false, blockedBy: ["acme-001"] })));
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    expect((await screen.findByTestId("readiness")).textContent).toContain("Blocked by");
+  });
+
+  it("offers Back when opened from another initiative", async () => {
+    const user = userEvent.setup();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    window.history.replaceState({ snoboardOpenStack: ["acme-001"] }, "", "/?open=acme-002");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(details())));
+    render(<DetailsSheet openId="acme-002" backTo="acme-001" onOpenChange={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: "Back to acme-001" }));
+    expect(back).toHaveBeenCalledTimes(1);
   });
 });

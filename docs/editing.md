@@ -8,6 +8,8 @@ Snoboard can save small changes from the board: status, priority, phase status, 
 | `SNOBOARD_EDIT_BASE_BRANCH` | Branch pull requests target. Defaults to the repository's default branch |
 | `SNOBOARD_EDIT_DIRECT_BRANCH` | Branch `direct` updates. Required when `direct` is enabled. This is usually `main` |
 | `SNOBOARD_EDIT_BOT_TOKEN_FILE` | Optional token file so password and Cloudflare Access users can submit |
+| `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` / `_STORE` | How long a connected write token lives (default `1h`, max `12h`) and whether it survives restarts (see [auth.md](auth.md#write-token-lifetime-and-storage)) |
+| `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE` | `true` asks for write access at GitHub sign-in: one consent, no separate connect |
 | `SNOBOARD_GITHUB_WRITE_CONNECT` | `true` lets Cloudflare Access users connect their own GitHub at submit (see [auth.md](auth.md#connect-github-at-submit-cloudflare-access)) |
 | `SNOBOARD_PASSWORD_NAME` | Optional label in bot commit trailers. Defaults to `password-user` |
 
@@ -87,9 +89,11 @@ Put the token in a file by itself and point `SNOBOARD_EDIT_BOT_TOKEN_FILE` at th
 
 ## GitHub sign-in and scopes
 
-GitHub users connect write access once per session from the submit dialog (`GET /auth/github/write`). Login asks
-only for read scopes; the write grant asks for `repo` (or `public_repo`, see `docs/auth.md`). The token stays
-encrypted in server memory for at most an hour and is dropped on logout.
+GitHub users connect write access from the submit dialog (`GET /auth/github/write`). The dialog does it on its own:
+it goes to GitHub, which returns at once for an app already authorized, then reopens and submits the unchanged basket.
+Login asks only for read scopes (unless `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE=true`); the write grant asks for `repo`
+(or `public_repo`, see `docs/auth.md`). The token stays encrypted on the server for `SNOBOARD_GITHUB_WRITE_TOKEN_TTL`
+(default one hour, at most 12h, optionally in an encrypted file that survives restarts) and is dropped on logout.
 
 With several repositories (`SNOBOARD_REPOS_FILE`), every edit setting above lives on the repository entry
 (`edit.modes`, `edit.baseBranch`, `edit.directBranch`, `edit.botTokenFile`, `edit.githubWriteScope`). The basket

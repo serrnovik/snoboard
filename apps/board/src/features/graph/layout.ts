@@ -31,6 +31,8 @@ export type LayoutItem = {
   status: string;
   depends_on: readonly string[];
   phases?: readonly LayoutPhase[];
+  /** A pending basket edit changes this initiative's status or readiness. */
+  pending?: boolean;
 };
 
 export type LayoutOptions = {
@@ -52,6 +54,7 @@ export type GraphNodeData = {
   initiativeId: string;
   blocked: boolean;
   done: boolean;
+  pending: boolean;
 };
 
 export type PositionedNode = {
@@ -86,6 +89,7 @@ export function layoutGraph(items: readonly LayoutItem[], options: LayoutOptions
   const graph = buildInitiativeGraph(items, options.includePhases, options.doneStatuses);
   const doneStatuses = new Set(options.doneStatuses);
   const titles = titleById(items);
+  const pendingIds = new Set(items.filter((item) => item.pending === true).map((item) => item.id));
   const blockedIds = blockedNodeIds(graph);
   // "Linked" is judged on the whole graph so hiding one endpoint never hides its neighbours.
   const linked = new Set(
@@ -124,6 +128,7 @@ export function layoutGraph(items: readonly LayoutItem[], options: LayoutOptions
         initiativeId: initiativeIdFromNodeId(node.id),
         blocked: blockedIds.has(node.id),
         done: doneStatuses.has(node.status),
+        pending: pendingIds.has(node.id),
       },
     };
     return [positioned];

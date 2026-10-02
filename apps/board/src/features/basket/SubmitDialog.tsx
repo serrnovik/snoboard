@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -93,6 +93,76 @@ export function formatSubmitMode(mode: EditModeName, directBranch?: string): str
   return branch === "main" ? "Push to main" : `Push to ${branch}`;
 }
 
+/** Pending "submit after connecting GitHub", kept for one redirect round trip. */
+export type ResumeIntent = { repoId: string; mode: EditModeName; basketHash: string; at: number };
+
+export const RESUME_STORAGE_KEY = "snoboard:submit-resume:v1";
+export const RESUME_PARAM = "resumeSubmit";
+/** An intent older than the OAuth state cookie (10 min) is stale. */
+const RESUME_MAX_AGE_MS = 10 * 60 * 1000;
+
+/** Navigation seam so tests can watch the redirect instead of leaving the page. */
+export const submitNavigation = {
+  assign(url: string): void {
+    window.location.assign(url);
+  },
+};
+
+/** Stable fingerprint of the basket (cyrb53 over its JSON). Not a security check: it only detects changes. */
+export function basketHash(edits: readonly Edit[]): string {
+  const text = JSON.stringify(edits);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${edits.length}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+}
+
+export function saveResumeIntent(intent: ResumeIntent): void {
+  if (typeof sessionStorage === "undefined") return;
+  sessionStorage.setItem(RESUME_STORAGE_KEY, JSON.stringify(intent));
+}
+
+/** Read and forget the intent for `repoId`. Wrong repo, stale or malformed: null. */
+export function takeResumeIntent(repoId: string, now = Date.now()): ResumeIntent | null {
+  if (typeof sessionStorage === "undefined") return null;
+  const raw = sessionStorage.getItem(RESUME_STORAGE_KEY);
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    sessionStorage.removeItem(RESUME_STORAGE_KEY);
+    return null;
+  }
+  if (!isRecord(parsed) || parsed.repoId !== repoId) return null;
+  sessionStorage.removeItem(RESUME_STORAGE_KEY);
+  const { mode, basketHash: hash, at } = parsed;
+  if ((mode !== "direct" && mode !== "pr") || typeof hash !== "string" || typeof at !== "number") return null;
+  if (now - at > RESUME_MAX_AGE_MS || at > now + 60_000) return null;
+  return { repoId, mode, basketHash: hash, at };
+}
+
+/** Current page with `?resumeSubmit=1`, as a same-origin path for the OAuth return. */
+export function resumeReturnPath(location: Pick<Location, "pathname" | "search" | "hash">): string {
+  const params = new URLSearchParams(location.search);
+  params.set(RESUME_PARAM, "1");
+  return `${location.pathname}?${params.toString()}${location.hash}`;
+}
+
+/** Drop `?resumeSubmit=1` from the address bar without a reload. */
+function clearResumeParam(): void {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(RESUME_PARAM)) return;
+  url.searchParams.delete(RESUME_PARAM);
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function SubmitDialog({
   repoId = DEFAULT_REPO_ID,
   titles,
@@ -115,6 +185,22 @@ export function SubmitDialog({
   // The basket is cleared on success; keep what was sent so the result can list it.
   const [submitted, setSubmitted] = useState<readonly Edit[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  // Set on return from GitHub: submit automatically once the basket checks out.
+  const resume = useRef<{ mode: EditModeName; autoSubmit: boolean } | null>(null);
+  // At most one automatic redirect per page load (and none right after a resume), so it cannot loop.
+  const autoConnectUsed = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get(RESUME_PARAM) !== "1") return;
+    const intent = takeResumeIntent(repoId);
+    if (intent === null) return;
+    clearResumeParam();
+    autoConnectUsed.current = true;
+    resume.current = { mode: intent.mode, autoSubmit: intent.basketHash === basketHash(basket.list()) };
+    setOpen(true);
+  }, [repoId, basket.list]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,7 +230,12 @@ export function SubmitDialog({
         const configBody: unknown = await configResponse.json().catch(() => null);
         const nextConfig = parseEditConfig(configBody);
         setConfig(nextConfig);
-        setMode(rememberedSubmitMode(repoId, nextConfig.modes, nextConfig.defaultMode));
+        const resumed = resume.current;
+        setMode(
+          resumed !== null && nextConfig.modes.includes(resumed.mode)
+            ? resumed.mode
+            : rememberedSubmitMode(repoId, nextConfig.modes, nextConfig.defaultMode),
+        );
         if (validateResponse === null) {
           setResults([]);
           return;
@@ -169,6 +260,30 @@ export function SubmitDialog({
       });
     return () => controller.abort();
   }, [open, repoId, basket.list, round]);
+
+  // After the check: connect GitHub automatically, or finish a resumed submit.
+  useEffect(() => {
+    if (!open || checking || results === null || config === null || success !== null || busy) return;
+    const valid = results.filter((result) => result.ok).length;
+    if (config.needsGithubWrite) {
+      resume.current = null;
+      if (valid > 0) connectGithub(mode, true);
+      return;
+    }
+    const resumed = resume.current;
+    if (resumed === null) return;
+    resume.current = null;
+    if (resumed.autoSubmit && valid > 0 && valid === results.length) void send(mode);
+  });
+
+  /** Remember what to submit, then go through the GitHub write grant and come back here. */
+  function connectGithub(nextMode: EditModeName, automatic: boolean) {
+    if (automatic && autoConnectUsed.current) return;
+    autoConnectUsed.current = true;
+    saveResumeIntent({ repoId, mode: nextMode, basketHash: basketHash(basket.list()), at: Date.now() });
+    setConnecting(true);
+    submitNavigation.assign(githubWriteHref(repoId, resumeReturnPath(window.location)));
+  }
 
   function chooseMode(next: EditModeName) {
     setMode(next);
@@ -246,7 +361,8 @@ export function SubmitDialog({
         setSuccess(parsed);
         return;
       }
-      if (parsed.code === "needs_github_write") {
+      if (parsed.code === "needs_github_write" || (response.status === 401 && isRecord(body) && body.needsGithubWrite === true)) {
+        // The effect above reconnects once; the link stays as a fallback.
         setConfig({ ...current, needsGithubWrite: true });
       }
       setFailure(parsed);
@@ -279,6 +395,7 @@ export function SubmitDialog({
       onOpenChange={(next) => {
         setOpen(next);
         if (!next) {
+          resume.current = null;
           setFailure(null);
           setSuccess(null);
           setProblem(null);
@@ -286,7 +403,7 @@ export function SubmitDialog({
       }}
     >
       <DialogTrigger render={<Button type="button" />}>Submit</DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Submit basket</DialogTitle>
           <DialogDescription>Check the edits, then save them. Nothing is written until this succeeds.</DialogDescription>
@@ -315,7 +432,7 @@ export function SubmitDialog({
           )
         ) : null}
         {results !== null && success === null && results.length > 0 ? (
-          <ul className="flex max-h-[45vh] flex-col gap-1 overflow-y-auto pr-1">
+          <ul className="flex min-w-0 max-h-[45vh] flex-col gap-1 overflow-y-auto overflow-x-hidden pr-1">
             {results.map((result) => {
               const edit = edits[result.index];
               const label = edit === undefined ? `Edit ${result.index + 1}` : describeEdit(edit, titles);
@@ -334,7 +451,7 @@ export function SubmitDialog({
                   {edit === undefined ? label : <EditLabel edit={edit} titles={titles} />}
                   {result.ok ? null : (
                     <>
-                      <span data-testid="validate-error" className="flex items-start gap-1.5 text-destructive">
+                      <span data-testid="validate-error" className="flex min-w-0 items-start gap-1.5 break-words text-destructive">
                         <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
                         <span>{readableError(result.error)}</span>
                       </span>
@@ -412,8 +529,20 @@ export function SubmitDialog({
             ))}
           </fieldset>
         ) : null}
+        {success === null && needsGithubWrite && connecting ? (
+          <p role="status" data-testid="github-connecting" className="text-sm text-muted-foreground">
+            Connecting to GitHub…
+          </p>
+        ) : null}
         {success === null && needsGithubWrite ? (
-          <a href={githubWriteHref(repoId)} className="text-sm underline">
+          <a
+            href={githubWriteHref(repoId)}
+            className="text-sm underline"
+            onClick={(event) => {
+              event.preventDefault();
+              connectGithub(mode, false);
+            }}
+          >
             Connect GitHub
           </a>
         ) : null}
@@ -627,7 +756,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Write grant for this repo; the server picks the scope from the repo's settings. */
-export function githubWriteHref(repoId: string): string {
-  const back = repoId === DEFAULT_REPO_ID ? "/" : `/r/${repoId}/`;
+export function githubWriteHref(repoId: string, returnPath?: string): string {
+  const back = returnPath ?? (repoId === DEFAULT_REPO_ID ? "/" : `/r/${repoId}/`);
   return `/auth/github/write?repo=${encodeURIComponent(repoId)}&return=${encodeURIComponent(back)}`;
 }

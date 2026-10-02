@@ -89,6 +89,9 @@ test("README screenshots", async ({ page }) => {
 
   await page.getByRole("link", { name: "Dependencies" }).click();
   await expect(page.getByLabel("Dependency graph")).toBeVisible();
+  await expect(page.getByText("acme-003").first()).toBeVisible();
+  // acme-002 is done in the basket; the basket-aware graph hides it until "Hide done" is off.
+  await page.getByRole("switch", { name: "Hide done initiatives" }).click();
   await expect(page.getByText("acme-002").first()).toBeVisible();
   // Phase nodes on top of the default view (done and unlinked initiatives hidden).
   await page.getByRole("switch", { name: "Show phase nodes" }).click();

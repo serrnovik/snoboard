@@ -1,6 +1,6 @@
-import { ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { BoardItem } from "snoboard/browser";
+import type { BoardItem, InitiativePeople } from "snoboard/browser";
 import { redirectToLogin } from "@/features/board/sync";
 import {
   Sheet,
@@ -12,11 +12,15 @@ import {
 import { EditControls } from "@/features/details/EditControls";
 import { IssueBadge, normalizeIssues } from "@/features/issues/IssueBadge";
 import { forgeFileUrl, forgeFolderUrl, forgePrUrl, type ForgeLinkConfig } from "./links.js";
+import { HistorySection } from "./History";
+import { PeopleDetails } from "@/features/people/People";
+import { useBoardView } from "@/features/board/view-store";
+import { readinessPending } from "@/features/board/effective";
 import { SummaryMarkdown } from "./markdown.js";
 import { readLinks } from "./ListEditors";
 import { resolveImageSrc } from "@/features/attachments/images";
 import { isSafeLinkUrl } from "snoboard/browser";
-import { currentOpenId, initiativeIdOf, setOpenId } from "./open.js";
+import { currentOpenId, goBackInDetails, initiativeIdOf, openStack, setOpenId } from "./open.js";
 import { useRepoId } from "@/features/repo/context";
 import { formatQualifiedId, initiativeDetailsPath, parseQualifiedId, shareUrl } from "@/lib/ids";
 import { boardPath, repoApi } from "@/lib/routes";
@@ -32,6 +36,7 @@ export type InitiativeDetails = BoardItem & {
   dependents: string[];
   forge?: ForgeLinkConfig;
   prs?: Record<string, PullEnrichment>;
+  people?: InitiativePeople;
 };
 
 const DEFAULT_FORGE: ForgeLinkConfig = {
@@ -49,9 +54,13 @@ type LoadState = {
 
 export function DetailsDrawer() {
   const [openId, setCurrent] = useState<string | null>(null);
+  const [backTo, setBackTo] = useState<string | null>(null);
 
   useEffect(() => {
-    const sync = () => setCurrent(currentOpenId());
+    const sync = () => {
+      setCurrent(currentOpenId());
+      setBackTo(openStack().at(-1) ?? null);
+    };
     sync();
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
@@ -60,6 +69,7 @@ export function DetailsDrawer() {
   return (
     <DetailsSheet
       openId={openId}
+      backTo={backTo}
       onOpenChange={(open) => {
         if (!open) setOpenId(null);
       }}
@@ -69,9 +79,12 @@ export function DetailsDrawer() {
 
 export function DetailsSheet({
   openId,
+  backTo = null,
   onOpenChange,
 }: {
   openId: string | null;
+  /** Initiative the panel came from; shows a Back button. */
+  backTo?: string | null;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
@@ -81,7 +94,7 @@ export function DetailsSheet({
         className="w-full overflow-y-auto data-[side=right]:sm:max-w-xl!"
         data-testid="details-sheet"
       >
-        {openId !== null ? <InitiativeBody id={openId} variant="sheet" /> : null}
+        {openId !== null ? <InitiativeBody id={openId} variant="sheet" backTo={backTo} /> : null}
       </SheetContent>
     </Sheet>
   );
@@ -95,7 +108,7 @@ export function InitiativePage({ id }: { id: string }) {
   );
 }
 
-function InitiativeBody({ id, variant }: { id: string; variant: "sheet" | "page" }) {
+function InitiativeBody({ id, variant, backTo = null }: { id: string; variant: "sheet" | "page"; backTo?: string | null }) {
   const repoId = useRepoId();
   const state = useInitiative(id);
   const title = state.data?.title ?? id;
@@ -104,6 +117,18 @@ function InitiativeBody({ id, variant }: { id: string; variant: "sheet" | "page"
     <div className="flex flex-col gap-4" data-testid="initiative-details">
       {variant === "sheet" ? (
         <SheetHeader>
+          {backTo !== null ? (
+            <button
+              type="button"
+              data-testid="details-back"
+              aria-label={`Back to ${backTo}`}
+              onClick={goBackInDetails}
+              className="inline-flex w-fit items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
+            >
+              <ArrowLeft aria-hidden="true" className="size-4" />
+              Back to {backTo}
+            </button>
+          ) : null}
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>{qualified}</SheetDescription>
         </SheetHeader>
@@ -133,6 +158,14 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
   const folderHref = forgeFolderUrl(forge, item.sourceRef, item.path);
   const dependencies = item.depends_on ?? [];
   const issues = normalizeIssues(item.issues);
+  const view = useBoardView();
+  const effective = view?.items.get(item.id);
+  const people = view?.people[item.id] ?? item.people;
+  const blockers = effective?.blockedBy ?? item.blockedBy ?? [];
+  const ready = effective?.isReady ?? item.isReady;
+  const pendingReadiness = effective !== undefined && readinessPending(effective);
+  const pendingStatus =
+    effective?.committed !== undefined && effective.committed.status !== effective.status ? effective.status : null;
   return (
     <div className={variant === "sheet" ? "flex flex-col gap-4 px-4 pb-4" : "flex flex-col gap-4"}>
       <EditControls item={item} />
@@ -206,6 +239,23 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
       </section>
       <section className="flex flex-col gap-2 text-sm">
         <h2 className="font-medium">Dependencies</h2>
+        {pendingStatus !== null ? (
+          <p data-testid="pending-status">
+            <span className="text-muted-foreground">Status </span>
+            {pendingStatus} <span className="text-muted-foreground">(pending)</span>
+          </p>
+        ) : null}
+        {blockers.length > 0 ? (
+          <p data-testid="readiness">
+            <span className="text-muted-foreground">Blocked by </span>
+            <IdList ids={blockers} variant={variant} />
+            {pendingReadiness ? <span className="text-muted-foreground"> (pending)</span> : null}
+          </p>
+        ) : ready ? (
+          <p data-testid="readiness">
+            Ready{pendingReadiness ? <span className="text-muted-foreground"> (pending)</span> : null}
+          </p>
+        ) : null}
         <p>
           <span className="text-muted-foreground">Depends on </span>
           <IdList ids={dependencies} variant={variant} />
@@ -215,6 +265,10 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
           <IdList ids={item.dependents} variant={variant} />
         </p>
       </section>
+      {people !== undefined && (people.creator !== null || people.participants.length > 0) ? (
+        <PeopleDetails people={people} />
+      ) : null}
+      <HistorySection id={item.id} forge={forge} />
       <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Source</dt>
         <dd className="min-w-0 break-all">{item.sourceRef}</dd>
@@ -349,7 +403,7 @@ function DependencyLink({ id, variant }: { id: string; variant: "sheet" | "page"
         href={`?open=${encodeURIComponent(targetId)}`}
         onClick={(event) => {
           event.preventDefault();
-          setOpenId(targetId);
+          setOpenId(targetId, { fromDetails: true });
         }}
       >
         {text}

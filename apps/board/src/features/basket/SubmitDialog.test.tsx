@@ -6,16 +6,27 @@ import { renderHook } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  basketHash,
   rememberedSubmitMode,
+  RESUME_STORAGE_KEY,
+  resumeReturnPath,
+  saveResumeIntent,
   SubmitDialog,
   submitModeStorageKey,
+  submitNavigation,
+  takeResumeIntent,
 } from "@/features/basket/SubmitDialog";
 import { resetBasketStore, useBasket } from "@/features/basket/store";
 
 const EDIT = { kind: "setStatus" as const, id: "acme-001", from: "idea", to: "planned" };
 
+const realAssign = submitNavigation.assign;
+
 afterEach(() => {
   cleanup();
+  submitNavigation.assign = realAssign;
+  window.history.replaceState(null, "", "/");
+  sessionStorage.clear();
   localStorage.clear();
   resetBasketStore();
   vi.unstubAllGlobals();
@@ -93,9 +104,12 @@ describe("submit dialog", () => {
     expect(within(dialog).getByRole("radio", { name: "Push to live" })).toBeTruthy();
   });
 
-  it("asks to connect GitHub instead of submitting", async () => {
+  it("connects GitHub automatically instead of submitting, keeping a fallback link", async () => {
     const user = userEvent.setup();
     queueEdit();
+    const navigate = vi.fn();
+    submitNavigation.assign = navigate;
+    window.history.replaceState(null, "", "/?view=table");
     const calls: string[] = [];
     installFetch(async (url) => {
       calls.push(url);
@@ -111,8 +125,114 @@ describe("submit dialog", () => {
     const dialog = await screen.findByRole("dialog");
     const link = await within(dialog).findByRole("link", { name: "Connect GitHub" });
     expect(link.getAttribute("href")).toBe("/auth/github/write?repo=default&return=%2F");
+    expect(within(dialog).getByTestId("github-connecting").textContent).toBe("Connecting to GitHub…");
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(
+      `/auth/github/write?repo=default&return=${encodeURIComponent("/?view=table&resumeSubmit=1")}`,
+    );
+    const intent = JSON.parse(sessionStorage.getItem(RESUME_STORAGE_KEY) ?? "null") as Record<string, unknown>;
+    expect(intent).toMatchObject({ repoId: "default", mode: "direct", basketHash: basketHash([EDIT]) });
     expect(within(dialog).queryByRole("button", { name: "Submit edits" })).toBeNull();
     expect(calls.some((url) => url.endsWith("/edits/submit"))).toBe(false);
+  });
+
+  it("resumes after GitHub: reopens, re-validates and submits an unchanged basket", async () => {
+    queueEdit();
+    saveResumeIntent({ repoId: "default", mode: "pr", basketHash: basketHash([EDIT]), at: Date.now() });
+    window.history.replaceState(null, "", "/?view=table&resumeSubmit=1");
+    const navigate = vi.fn();
+    submitNavigation.assign = navigate;
+    const calls: { url: string; body?: unknown }[] = [];
+    installFetch(async (url, init) => {
+      calls.push({ url, body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined });
+      if (url.endsWith("/edit-config")) return configBody({ defaultMode: "direct", modes: ["direct", "pr"] });
+      if (url.endsWith("/edits/validate")) return json({ results: [{ index: 0, ok: true }] });
+      if (url.endsWith("/edits/submit")) {
+        return json({ ok: true, mode: "pr", commit: "abc1234fff", branch: "b", pr: { number: 9, url: "https://github.com/a/b/pull/9" } });
+      }
+      return json({ error: "not found" }, 404);
+    });
+
+    render(<SubmitDialog />);
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByTestId("submit-pr")).toBeTruthy();
+    expect(calls.find((call) => call.url.endsWith("/edits/submit"))?.body).toMatchObject({ mode: "pr" });
+    expect(window.location.search).toBe("?view=table");
+    expect(sessionStorage.getItem(RESUME_STORAGE_KEY)).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("resumes after GitHub but only reopens when the basket changed", async () => {
+    queueEdit();
+    saveResumeIntent({ repoId: "default", mode: "direct", basketHash: "0:other", at: Date.now() });
+    window.history.replaceState(null, "", "/?resumeSubmit=1");
+    const calls: string[] = [];
+    installFetch(async (url) => {
+      calls.push(url);
+      if (url.endsWith("/edit-config")) return configBody({ defaultMode: "direct", modes: ["direct"] });
+      if (url.endsWith("/edits/validate")) return json({ results: [{ index: 0, ok: true }] });
+      return json({ error: "not found" }, 404);
+    });
+
+    render(<SubmitDialog />);
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("button", { name: "Submit edits" })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls.some((url) => url.endsWith("/edits/submit"))).toBe(false);
+  });
+
+  it("does not redirect again when GitHub write is still missing after a resume", async () => {
+    queueEdit();
+    saveResumeIntent({ repoId: "default", mode: "direct", basketHash: basketHash([EDIT]), at: Date.now() });
+    window.history.replaceState(null, "", "/?resumeSubmit=1");
+    const navigate = vi.fn();
+    submitNavigation.assign = navigate;
+    installFetch(async (url) => {
+      if (url.endsWith("/edit-config")) return configBody({ defaultMode: "direct", modes: ["direct"], needsGithubWrite: true });
+      if (url.endsWith("/edits/validate")) return json({ results: [{ index: 0, ok: true }] });
+      return json({ error: "not found" }, 404);
+    });
+
+    render(<SubmitDialog />);
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("link", { name: "Connect GitHub" })).toBeTruthy();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("reconnects once when a submit answers 401 needsGithubWrite", async () => {
+    const user = userEvent.setup();
+    queueEdit();
+    const navigate = vi.fn();
+    submitNavigation.assign = navigate;
+    installFetch(async (url) => {
+      if (url.endsWith("/edit-config")) return configBody({ defaultMode: "direct", modes: ["direct"] });
+      if (url.endsWith("/edits/validate")) return json({ results: [{ index: 0, ok: true }] });
+      if (url.endsWith("/edits/submit")) {
+        return json({ ok: false, code: "github_auth", error: "Reconnect GitHub", needsGithubWrite: true }, 401);
+      }
+      return json({ error: "not found" }, 404);
+    });
+
+    render(<SubmitDialog />);
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(await within(dialog).findByRole("button", { name: "Submit edits" }));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
+    expect(String(navigate.mock.calls[0]?.[0])).toContain("resumeSubmit%3D1");
+    expect(sessionStorage.getItem(RESUME_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("ignores stale or foreign resume intents", () => {
+    const now = Date.now();
+    saveResumeIntent({ repoId: "widgets", mode: "pr", basketHash: "1:x", at: now });
+    expect(takeResumeIntent("default", now)).toBeNull();
+    expect(takeResumeIntent("widgets", now)).toMatchObject({ mode: "pr" });
+    expect(takeResumeIntent("widgets", now)).toBeNull();
+    saveResumeIntent({ repoId: "widgets", mode: "pr", basketHash: "1:x", at: now - 11 * 60 * 1000 });
+    expect(takeResumeIntent("widgets", now)).toBeNull();
+    expect(resumeReturnPath({ pathname: "/r/w/", search: "?a=1", hash: "#x" })).toBe("/r/w/?a=1&resumeSubmit=1#x");
+    expect(basketHash([EDIT])).toBe(basketHash([{ ...EDIT }]));
+    expect(basketHash([EDIT])).not.toBe(basketHash([{ ...EDIT, to: "done" }]));
   });
 
   it("keeps an invalid basket from being submitted", async () => {

@@ -24,7 +24,7 @@ export const ASSET_PATH = /^assets\/([a-z0-9]+(?:-[a-z0-9]+)*)\.(png|jpg|webp|gi
 /** A file name under `assets/`. */
 export const ASSET_FILE = /^([a-z0-9]+(?:-[a-z0-9]+)*)\.(png|jpg|webp|gif)$/;
 /** `new:<project>/<slug>`: an initiative created in the same basket. */
-export const NEW_INITIATIVE_REF = /^new:([a-z0-9][a-z0-9_-]*)\/([a-z0-9]+(?:-[a-z0-9]+)*)$/;
+export const NEW_INITIATIVE_REF = /^new:([a-z0-9_][a-z0-9_-]*)\/([a-z0-9]+(?:-[a-z0-9]+)*)$/;
 const MAX_BASE_NAME = 60;
 
 export function extensionFor(type: AttachmentType): string {

@@ -16,6 +16,7 @@ import { resetAuthConfig, setAuthConfig } from "./auth/env.js";
 import { resetForgeCache } from "./forge/github.js";
 import { SESSION_COOKIE, signSession } from "./auth/session.js";
 import { app } from "./index.js";
+import { resetHistoryCaches } from "./history.js";
 import { recordSyncError, resetStore, seedStore } from "./store.js";
 
 const refresh = vi.hoisted(() => vi.fn(async () => {}));
@@ -97,6 +98,7 @@ describe("read-only API", () => {
     resetActiveRepos();
     resetRefreshLimits();
     resetForgeCache();
+    resetHistoryCaches();
     setInitiativeRepoDir(undefined);
     delete process.env.SNOBOARD_GITHUB_TOKEN_FILE;
     refresh.mockClear();
@@ -125,7 +127,7 @@ describe("read-only API", () => {
       refs: Array<{ name: string }>;
     };
     expect(Object.keys(body).sort()).toEqual(
-      ["config", "errors", "items", "legacy", "proposals", "refs", "status"].sort(),
+      ["config", "errors", "items", "legacy", "people", "proposals", "refs", "status"].sort(),
     );
     expect((body as { proposals: unknown }).proposals).toEqual([]);
     expect(body.config).toEqual({
@@ -274,6 +276,47 @@ describe("read-only API", () => {
       vi.unstubAllGlobals();
       resetForgeCache();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves default-branch history and per-initiative people, cached per snapshot", async () => {
+    const files = await readTree(demoRoot);
+    const configText = files[".snoboard.yml"];
+    if (configText === undefined) throw new Error("demo repo is missing .snoboard.yml");
+    const config = loadConfig(configText);
+    const target = "initiatives/acme/001-onboarding/initiative.md";
+    const repo = await createTmpRepo({
+      commits: [
+        { message: "demo", date: "2024-01-01T00:00:00Z", files },
+        {
+          message: "board edit\n\nSnoboard-Edit-By: octo (board)\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          date: "2024-01-02T00:00:00Z",
+          files: { [target]: `${files[target] ?? ""}\n` },
+        },
+      ],
+    });
+    try {
+      seedStore(await buildSnapshot(repo.dir, config), config);
+      setInitiativeRepoDir(repo.dir);
+      const response = await app.request("/api/initiatives/acme-001/history", authed());
+      expect(response.status).toBe(200);
+      const history = (await response.json()) as { commits: { sha: string; subject: string; author: string }[]; hasMore: boolean };
+      expect(history.commits.map((commit) => commit.subject)).toEqual(["board edit", "demo"]);
+      expect(history.hasMore).toBe(false);
+      expect((await app.request("/api/initiatives/acme-001/history?skip=-1", authed())).status).toBe(400);
+      expect((await app.request("/api/initiatives/acme-999/history", authed())).status).toBe(404);
+      expect((await app.request("/api/initiatives/acme-001/history")).status).toBe(401);
+
+      const board = (await (await app.request("/api/board", authed())).json()) as {
+        people: Record<string, { creator: { name: string } | null; participants: { name: string; login?: string }[] }>;
+      };
+      const people = board.people["acme-001"];
+      expect(people?.participants.map((person) => person.login ?? null)).toContain("octo");
+      expect(people?.participants.some((person) => /claude/i.test(person.name))).toBe(false);
+      expect(people?.creator).not.toBeNull();
+    } finally {
+      setInitiativeRepoDir(undefined);
+      await repo.remove();
     }
   });
 

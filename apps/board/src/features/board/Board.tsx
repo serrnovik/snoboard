@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, GripVertical } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { type BoardItem, type Edit } from "snoboard/browser";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { type BoardItem, type Edit, type InitiativePeople } from "snoboard/browser";
 import { AppVersion } from "@/components/app-version";
 import { PageActionsPortal } from "@/components/page-actions";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,6 @@ import { Filters } from "@/features/board/Filters";
 import { useFoldedColumns } from "@/features/board/folded";
 import { LegacyList } from "@/features/board/LegacyList";
 import {
-  compareBoardItems,
   defaultBranchName,
   matchesFilters,
   parseBoardQuery,
@@ -39,6 +38,21 @@ import {
   toggleShowAllClosed,
 } from "@/features/board/model";
 import { rateLimitNote, useBoardResource } from "@/features/board/sync";
+import { effectiveItems } from "@/features/board/effective";
+import {
+  CLOSED_AGE_OPTIONS,
+  COLUMN_SORT_OPTIONS,
+  compareBy,
+  DEFAULT_CLOSED_AGE,
+  DEFAULT_COLUMN_SORT,
+  isClosedAge,
+  isColumnSort,
+  useClosedAges,
+  useColumnSorts,
+  type ClosedAge,
+  type ColumnSort,
+} from "@/features/board/columns";
+import { publishBoardView } from "@/features/board/view-store";
 
 const POLL_MS = 60_000;
 const EMPTY_MESSAGE = "No Snoboard initiatives yet — run `snoboard new`";
@@ -154,15 +168,28 @@ function BoardBody({
       .filter((item) => isStale(item, payload.config.doneStatuses, staleAfterDays, nowMs))
       .map((item) => item.id),
   );
-  const pending = editing ? basket.edits : [];
-  const matching = payload.items.filter((item) => matchesFilters(item, query));
-  const filtered = (query.hideStale ? matching.filter((item) => !staleIds.has(item.id)) : matching).map((item) =>
-    withPendingStatus(item, pending),
+  const pending = editing ? basket.edits : NO_EDITS;
+  const ages = useClosedAges(repoId);
+  const sorts = useColumnSorts(repoId);
+  const effective = useMemo(
+    () => effectiveItems(payload.items, pending, payload.config.doneStatuses),
+    [payload.items, pending, payload.config.doneStatuses],
   );
+  const people = payload.people ?? NO_PEOPLE;
+  useEffect(() => {
+    publishBoardView({ items: new Map(effective.map((item) => [item.id, item])), people });
+    return () => publishBoardView(null);
+  }, [effective, people]);
+  const pendingStatusIds = new Set(pending.flatMap((edit) => (edit.kind === "setStatus" ? [edit.id] : [])));
+  const matching = effective.filter((item) => matchesFilters(item, query));
+  const filtered = query.hideStale ? matching.filter((item) => !staleIds.has(item.id)) : matching;
   const staleCount = matching.length - matching.filter((item) => !staleIds.has(item.id)).length;
   const projects = uniqueSorted(payload.items.map((item) => item.project));
   const labels = uniqueSorted(payload.items.flatMap((item) => item.labels ?? []));
   const defaultBranch = defaultBranchName(payload.refs);
+  const ageFor = (status: string): ClosedAge =>
+    showsAllClosed(query.showAllClosed, status) ? "all" : (ages.values[status] ?? DEFAULT_CLOSED_AGE);
+  const sortFor = (status: string): ColumnSort => sorts.values[status] ?? DEFAULT_COLUMN_SORT;
   const byStatus = payload.config.statuses.map((status) => ({
     status,
     column: visibleColumnItems(
@@ -170,18 +197,20 @@ function BoardBody({
       status,
       payload.config.doneStatuses,
       payload.config.priorities,
-      showsAllClosed(query.showAllClosed, status),
+      false,
       nowMs,
+      { age: ageFor(status), sort: sortFor(status), pendingIds: pendingStatusIds },
     ),
   }));
   const columns = Object.fromEntries(byStatus.map(({ status, column }) => [status, column.visible]));
   const closedStatuses = payload.config.statuses.filter((status) => isClosedStatus(status, payload.config.doneStatuses));
-  const toggledQuery = (status: string): BoardQuery => ({
-    ...query,
-    showAllClosed: toggleShowAllClosed(query.showAllClosed, status, closedStatuses),
-  });
-  const toggleHref = (status: string) =>
-    `${window.location.pathname}${serializeBoardQuery(window.location.search, toggledQuery(status))}`;
+  const setAge = (status: string, age: ClosedAge) => {
+    ages.set(status, age);
+    // A URL override (closed=all or closed=<status>) wins over the stored age; drop it for this column.
+    if (showsAllClosed(query.showAllClosed, status)) {
+      onQueryChange({ ...query, showAllClosed: toggleShowAllClosed(query.showAllClosed, status, closedStatuses) });
+    }
+  };
   const snapshotStatus = new Map(payload.items.map((item) => [item.id, item.status]));
   const titleById = new Map(payload.items.map((item) => [item.id, item.title]));
   const byId = new Map(filtered.map((item) => [item.id, item]));
@@ -291,22 +320,34 @@ function BoardBody({
                         {column.hidden > 0 ? `${total} · ${column.visible.length} shown` : total}
                       </span>
                     </div>
-                    {column.closed && (column.hidden > 0 || showsAllClosed(query.showAllClosed, status)) ? (
-                      <a
-                        href={toggleHref(status)}
-                        className="px-1 text-xs underline"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          onQueryChange(toggledQuery(status));
+                    <div className="flex flex-wrap items-center gap-2 px-1 text-xs text-muted-foreground">
+                      <ColumnSelect
+                        label={`Sort ${heading}`}
+                        testId={`sort-${status}`}
+                        value={sortFor(status)}
+                        options={COLUMN_SORT_OPTIONS}
+                        onChange={(value) => {
+                          if (isColumnSort(value)) sorts.set(status, value);
                         }}
-                      >
-                        {column.hidden > 0 ? `Show all (${total})` : "Show recent"}
-                      </a>
-                    ) : null}
+                      />
+                      {column.closed ? (
+                        <ColumnSelect
+                          label={`Show ${heading} changed within`}
+                          testId={`age-${status}`}
+                          value={ageFor(status)}
+                          options={editing ? CLOSED_AGE_OPTIONS : CLOSED_AGE_OPTIONS.filter((option) => option.value !== "session")}
+                          onChange={(value) => {
+                            if (isClosedAge(value)) setAge(status, value);
+                          }}
+                        />
+                      ) : null}
+                    </div>
                     <ColumnCards
                       status={status}
                       items={column.visible}
                       priorities={payload.config.priorities}
+                      sort={sortFor(status)}
+                      people={people}
                       byId={byId}
                       editing={editing}
                       doneStatuses={payload.config.doneStatuses}
@@ -337,6 +378,8 @@ function ColumnCards({
   status,
   items,
   priorities,
+  sort,
+  people,
   byId,
   editing,
   doneStatuses,
@@ -349,6 +392,8 @@ function ColumnCards({
   status: string;
   items: BoardItem[];
   priorities: readonly string[];
+  sort: ColumnSort;
+  people: Readonly<Record<string, InitiativePeople>>;
   byId: ReadonlyMap<string, BoardItem>;
   editing: boolean;
   doneStatuses: readonly string[];
@@ -361,7 +406,7 @@ function ColumnCards({
   const drop = useKanbanDrop();
   const showSlot = drop.dropColumnId === status && drop.activeColumnId !== null && drop.activeColumnId !== status;
   const dragged = showSlot && drop.activeId != null ? byId.get(String(drop.activeId)) : undefined;
-  const slotAt = dragged === undefined ? -1 : landingIndex(items, dragged, priorities);
+  const slotAt = dragged === undefined ? -1 : landingIndex(items, dragged, priorities, sort);
 
   if (items.length === 0 && slotAt < 0) {
     return <p className="px-1 text-xs text-muted-foreground">No initiatives</p>;
@@ -390,6 +435,7 @@ function ColumnCards({
                 pending={pendingEditsFor(pending, item.id)}
                 proposed={proposalsFor(proposals, item.id)}
                 titles={titles}
+                people={people[item.id]}
                 onOpen={setOpenId}
               />
             </div>
@@ -402,6 +448,7 @@ function ColumnCards({
             stale={staleIds.has(item.id)}
             proposed={proposalsFor(proposals, item.id)}
             titles={titles}
+            people={people[item.id]}
             onOpen={setOpenId}
           />
         )}
@@ -440,8 +487,13 @@ function DragGhost({ items }: { items: readonly BoardItem[] }) {
   );
 }
 
-function landingIndex(items: readonly BoardItem[], dragged: BoardItem, priorities: readonly string[]): number {
-  const ranked = [...items, dragged].sort((left, right) => compareBoardItems(left, right, priorities));
+function landingIndex(
+  items: readonly BoardItem[],
+  dragged: BoardItem,
+  priorities: readonly string[],
+  sort: ColumnSort,
+): number {
+  const ranked = [...items, dragged].sort(compareBy(sort, priorities));
   const index = ranked.findIndex((entry) => entry.id === dragged.id);
   return index === -1 ? items.length : index;
 }
@@ -460,10 +512,39 @@ function BoardSkeleton() {
   );
 }
 
-function withPendingStatus(item: BoardItem, edits: readonly Edit[]): BoardItem {
-  const pending = edits.find((edit) => edit.kind === "setStatus" && edit.id === item.id);
-  if (pending === undefined || pending.kind !== "setStatus" || pending.to === item.status) return item;
-  return { ...item, status: pending.to };
+const NO_EDITS: readonly Edit[] = [];
+const NO_PEOPLE: Readonly<Record<string, InitiativePeople>> = {};
+
+function ColumnSelect({
+  label,
+  testId,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  testId: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onPointerDown={(event) => event.stopPropagation()}
+      className="h-6 max-w-[9.5rem] rounded-md border border-border bg-background px-1 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function statusHeading(status: string): string {

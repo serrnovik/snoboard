@@ -43,6 +43,7 @@ import { getProposals } from "./proposals.js";
 import { boardIssueLinks, fetchInitiativeIssues, issueLinkConfig } from "./issues/setup.js";
 import { botTokenFileFor, editSettingsFor, findActiveRepo, listActiveRepos } from "./repos-config.js";
 import { DEFAULT_REPO_ID, getConfig, getSnapshot, getStatus } from "./store.js";
+import { initiativeHistory, snapshotPeople } from "./history.js";
 
 const REFRESH_WINDOW_MS = 30_000;
 const REPO_ID = /^[a-z0-9-]{1,32}$/;
@@ -171,7 +172,7 @@ function editActor(c: Context<BoardEnv>): EditActor {
   return "anonymous";
 }
 
-api.get("/repos/:repo/board", (c) => {
+api.get("/repos/:repo/board", async (c) => {
   const repoId = c.req.param("repo");
   if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
   return boardJson(c, repoId);
@@ -191,11 +192,13 @@ function notReadyJson(c: Context<BoardEnv>, repoId: string) {
   return c.json({ error: `repository sync failed: ${status.lastError}`, code: "sync_failed", status }, 503);
 }
 
-function boardJson(c: Context<BoardEnv>, repoId: string) {
+async function boardJson(c: Context<BoardEnv>, repoId: string) {
   const snapshot = getSnapshot(repoId);
   const config = getConfig(repoId);
   if (snapshot === null || config === null) return notReadyJson(c, repoId);
+  const people = await snapshotPeople(repoId, initiativeRepoDir(repoId), snapshot, config);
   return c.json({
+    people,
     status: getStatus(repoId),
     config: {
       statuses: config.statuses,
@@ -288,6 +291,32 @@ async function initiativeAssetResponse(c: Context<BoardEnv>, repoId: string): Pr
   });
 }
 
+api.get("/repos/:repo/initiatives/:id/history", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
+  return initiativeHistoryJson(c, repoId);
+});
+
+api.get("/initiatives/:id/history", (c) => initiativeHistoryJson(c, firstRepoId()));
+
+/** Default-branch commits touching the initiative folder: metadata only, paged by `skip`. */
+async function initiativeHistoryJson(c: Context<BoardEnv>, repoId: string) {
+  const snapshot = getSnapshot(repoId);
+  if (snapshot === null) return notReadyJson(c, repoId);
+  const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
+  if (item === undefined) return c.json({ error: "not found" }, 404);
+  const repoDir = initiativeRepoDir(repoId);
+  if (repoDir === undefined) return c.json({ error: "snapshot not ready" }, 503);
+  const rawSkip = c.req.query("skip") ?? "0";
+  if (!/^\d{1,4}$/.test(rawSkip)) return c.json({ error: "invalid skip" }, 400);
+  try {
+    const history = await initiativeHistory(repoId, repoDir, snapshot, item.path, Number(rawSkip));
+    return c.json(history);
+  } catch {
+    return c.json({ error: "history unavailable" }, 500);
+  }
+}
+
 api.get("/repos/:repo/initiatives/:id", async (c) => {
   const repoId = c.req.param("repo");
   if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
@@ -313,8 +342,10 @@ async function initiativeJson(c: Context<BoardEnv>, repoId: string) {
     loadPulls(config, pullNumbers),
     fetchInitiativeIssues(repoId, item.issues),
   ]);
+  const people = config === null ? {} : await snapshotPeople(repoId, initiativeRepoDir(repoId), snapshot, config);
   return c.json({
     ...item,
+    ...(people[id] === undefined ? {} : { people: people[id] }),
     blockedChain: blockedChain(snapshot.graph, id),
     dependents,
     issues,

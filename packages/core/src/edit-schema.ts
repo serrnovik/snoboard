@@ -4,7 +4,7 @@ import { MAX_ISSUE_REFS, parseIssueRef } from "./issues.js";
 import { LinkSchema, MAX_LINKS } from "./links.js";
 
 // No Node imports here: the browser bundle (snoboard/browser) uses this schema.
-export const PROJECT_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+export const PROJECT_NAME = /^[a-z0-9_][a-z0-9_-]*$/;
 export const SLUG_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const INITIATIVE_ID = /^[a-z0-9_-]+-\d{3}$/;
 export const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#([1-9]\d*))?$/;

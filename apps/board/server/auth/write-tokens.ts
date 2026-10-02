@@ -1,6 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Context } from "hono";
-import { getAuthConfig } from "./env.js";
+import { DEFAULT_WRITE_TOKEN_TTL_MS, getAuthConfig } from "./env.js";
 import type { BoardEnv, CloudflareAccessIdentity } from "./middleware.js";
 import {
   readCookie,
@@ -12,18 +14,26 @@ import {
 } from "./session.js";
 
 /**
- * GitHub write tokens live only here: encrypted, in process memory, for at
- * most an hour. The browser holds an opaque random handle in an httpOnly
- * cookie scoped to `/api`; the token itself never leaves the server.
- * A restart (or a second replica) loses every token; users reconnect.
+ * GitHub write tokens live only here: AES-256-GCM encrypted, in process memory,
+ * for `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` (default 1h, at most 12h, never past the
+ * session). The browser holds an opaque random handle in an httpOnly cookie
+ * scoped to `/api`; the token itself never leaves the server.
+ * With `SNOBOARD_GITHUB_WRITE_TOKEN_STORE=encrypted-file` the encrypted entries are
+ * also mirrored to one 0600 file in the data directory, sealed again with
+ * AES-256-GCM under a second key derived from the session secret, so a restart
+ * keeps them. Otherwise a restart (or a second replica) loses every token.
  */
 export const WRITE_COOKIE = "snoboard_gh_write";
 export const WRITE_COOKIE_PATH = "/api";
-export const WRITE_TOKEN_TTL_MS = 60 * 60 * 1000;
-const WRITE_TOKEN_TTL_SECONDS = WRITE_TOKEN_TTL_MS / 1000;
+/** Default lifetime; the configured one is `writeTokenTtlMs()`. */
+export const WRITE_TOKEN_TTL_MS = DEFAULT_WRITE_TOKEN_TTL_MS;
 const MAX_ENTRIES = 10_000;
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const DIGEST_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const HKDF_INFO = "snoboard-github-write-token-v1";
+const FILE_HKDF_INFO = "snoboard-github-write-token-file-v1";
+const FILE_VERSION = 1;
+const FILE_AAD = Buffer.from(`${FILE_HKDF_INFO}\n${FILE_VERSION}`, "utf8");
 
 type Entry = {
   sessionKey: string;
@@ -58,6 +68,47 @@ export type WriteOwner = {
 const entries = new Map<string, Entry>();
 /** One token per session: sessionKey -> handle digest. */
 const bySession = new Map<string, string>();
+/** Set by `bootWriteTokens` when the encrypted-file store is on. */
+let persistence: { filePath: string; secret: Buffer } | null = null;
+
+type Logger = { warn(message: string): void };
+const defaultLogger: Logger = {
+  warn(message) {
+    console.warn(message);
+  },
+};
+let logger: Logger = defaultLogger;
+
+export function setWriteTokenLogger(next?: Logger): void {
+  logger = next ?? defaultLogger;
+}
+
+/** Configured lifetime of a write token in ms. */
+export function writeTokenTtlMs(): number {
+  return getAuthConfig().writeTokenTtlMs ?? DEFAULT_WRITE_TOKEN_TTL_MS;
+}
+
+/**
+ * Apply the token store from the auth config: memory (default) or the encrypted
+ * file, loaded now. Expired, foreign or unreadable entries are dropped.
+ */
+export function bootWriteTokens(now = Date.now()): void {
+  persistence = null;
+  resetWriteTokens();
+  const config = getAuthConfig();
+  const store = config.writeTokenStore;
+  if (store?.kind !== "encrypted-file") return;
+  if (config.sessionSecret === undefined) {
+    throw new Error("Invalid Snoboard auth environment: the encrypted-file write token store needs a session secret");
+  }
+  persistence = { filePath: store.filePath, secret: config.sessionSecret };
+  loadFile(now);
+}
+
+/** Path of the encrypted token file, or null for the memory store. */
+export function writeTokenFilePath(): string | null {
+  return persistence?.filePath ?? null;
+}
 
 /** Stable id of one signed session (same cookie, same key; a new login is a new key). */
 export function sessionKeyOf(claims: SessionClaims): string {
@@ -108,7 +159,8 @@ export function storeOwnerWriteToken(
   if (entries.size >= MAX_ENTRIES) throw new Error("write token store is full");
   const handle = randomBytes(32).toString("base64url");
   const digest = digestOf(handle);
-  const exp = Math.min(now + WRITE_TOKEN_TTL_MS, owner.expMs);
+  const ttl = writeTokenTtlMs();
+  const exp = Math.min(now + ttl, owner.expMs);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyFor(secret), iv);
   cipher.setAAD(aadFor(digest, sessionKey, owner.bind, login));
@@ -124,7 +176,8 @@ export function storeOwnerWriteToken(
     tag: cipher.getAuthTag(),
   });
   bySession.set(sessionKey, digest);
-  return { handle, maxAgeSeconds: Math.max(1, Math.min(WRITE_TOKEN_TTL_SECONDS, Math.floor((exp - now) / 1000))) };
+  persist(now);
+  return { handle, maxAgeSeconds: Math.max(1, Math.min(Math.floor(ttl / 1000), Math.floor((exp - now) / 1000))) };
 }
 
 /**
@@ -143,9 +196,11 @@ export function getWriteToken(c: Context<BoardEnv>, now = Date.now()): WriteToke
 /** Forget this session's write token (whatever handle the browser holds) and expire the cookie. */
 export function clearWriteToken(c: Context<BoardEnv>): void {
   const owner = ownerOf(c, true);
+  const before = entries.size;
   if (owner !== null) dropSession(owner.key);
   const handle = readCookie(c.req.header("cookie"), WRITE_COOKIE);
   if (handle !== null && HANDLE_PATTERN.test(handle)) dropDigest(digestOf(handle));
+  if (entries.size !== before) persist();
   c.header("set-cookie", writeCookie("", 0), { append: true });
 }
 
@@ -188,6 +243,7 @@ function openToken(secret: Buffer, owner: WriteOwner, handle: string, now: numbe
   if (entry === undefined) return null;
   if (entry.exp <= now) {
     dropDigest(digest);
+    persist(now);
     return null;
   }
   if (entry.sessionKey !== owner.key || entry.bind !== owner.bind) return null;
@@ -201,8 +257,136 @@ function openToken(secret: Buffer, owner: WriteOwner, handle: string, now: numbe
       : { token, login: entry.login, accessEmail: entry.accessEmail };
   } catch {
     dropDigest(digest);
+    persist(now);
     return null;
   }
+}
+
+type FileEntry = {
+  digest: string;
+  bind: string;
+  login: string;
+  accessEmail?: string;
+  exp: number;
+  iv: string;
+  ciphertext: string;
+  tag: string;
+};
+
+/** Write every live entry, keyed by session key, as one sealed blob. Atomic: 0600 temp file, then rename. */
+function persist(now = Date.now()): void {
+  if (persistence === null) return;
+  const { filePath, secret } = persistence;
+  const body: Record<string, FileEntry> = {};
+  for (const [digest, entry] of entries) {
+    if (entry.exp <= now) continue;
+    body[entry.sessionKey] = {
+      digest,
+      bind: entry.bind,
+      login: entry.login,
+      ...(entry.accessEmail === undefined ? {} : { accessEmail: entry.accessEmail }),
+      exp: entry.exp,
+      iv: entry.iv.toString("base64"),
+      ciphertext: entry.ciphertext.toString("base64"),
+      tag: entry.tag.toString("base64"),
+    };
+  }
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", fileKeyFor(secret), iv);
+  cipher.setAAD(FILE_AAD);
+  const data = Buffer.concat([cipher.update(JSON.stringify(body), "utf8"), cipher.final()]);
+  const sealed = JSON.stringify({
+    v: FILE_VERSION,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: data.toString("base64"),
+  });
+  const temp = `${filePath}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    writeFileSync(temp, sealed, { mode: 0o600, flag: "wx" });
+    chmodSync(temp, 0o600);
+    renameSync(temp, filePath);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    // Never the token or the path contents: only that persisting failed. Memory still holds the entries.
+    logger.warn(`snoboard: could not write the GitHub write token file (${errorCode(error)})`);
+  }
+}
+
+function loadFile(now: number): void {
+  if (persistence === null) return;
+  const { filePath, secret } = persistence;
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") logger.warn(`snoboard: the GitHub write token file is unreadable (${errorCode(error)}); starting empty`);
+    return;
+  }
+  const body = openFile(secret, raw);
+  if (body === null) {
+    logger.warn("snoboard: the GitHub write token file could not be decrypted; starting empty");
+    persist(now);
+    return;
+  }
+  let dropped = false;
+  for (const [sessionKey, value] of Object.entries(body)) {
+    const entry = readFileEntry(value);
+    if (entry === null || !DIGEST_PATTERN.test(sessionKey) || entry.exp <= now || entries.size >= MAX_ENTRIES) {
+      dropped = true;
+      continue;
+    }
+    entries.set(entry.digest, {
+      sessionKey,
+      bind: entry.bind,
+      login: entry.login,
+      ...(entry.accessEmail === undefined ? {} : { accessEmail: entry.accessEmail }),
+      exp: entry.exp,
+      iv: Buffer.from(entry.iv, "base64"),
+      ciphertext: Buffer.from(entry.ciphertext, "base64"),
+      tag: Buffer.from(entry.tag, "base64"),
+    });
+    bySession.set(sessionKey, entry.digest);
+  }
+  if (dropped) persist(now);
+}
+
+function openFile(secret: Buffer, raw: string): Record<string, unknown> | null {
+  try {
+    const sealed = JSON.parse(raw) as { v?: unknown; iv?: unknown; tag?: unknown; data?: unknown };
+    if (sealed.v !== FILE_VERSION) return null;
+    if (typeof sealed.iv !== "string" || typeof sealed.tag !== "string" || typeof sealed.data !== "string") return null;
+    const decipher = createDecipheriv("aes-256-gcm", fileKeyFor(secret), Buffer.from(sealed.iv, "base64"));
+    decipher.setAAD(FILE_AAD);
+    decipher.setAuthTag(Buffer.from(sealed.tag, "base64"));
+    const plain = Buffer.concat([decipher.update(Buffer.from(sealed.data, "base64")), decipher.final()]).toString("utf8");
+    const body: unknown = JSON.parse(plain);
+    if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+    return body as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function readFileEntry(value: unknown): FileEntry | null {
+  if (value === null || typeof value !== "object") return null;
+  const { digest, bind, login, accessEmail, exp, iv, ciphertext, tag } = value as Record<string, unknown>;
+  if (typeof digest !== "string" || !DIGEST_PATTERN.test(digest)) return null;
+  if (typeof bind !== "string" || typeof login !== "string") return null;
+  if (typeof exp !== "number" || !Number.isSafeInteger(exp)) return null;
+  if (accessEmail !== undefined && typeof accessEmail !== "string") return null;
+  if (typeof iv !== "string" || typeof ciphertext !== "string" || typeof tag !== "string") return null;
+  return { digest, bind, login, ...(accessEmail === undefined ? {} : { accessEmail }), exp, iv, ciphertext, tag };
+}
+
+function fileKeyFor(secret: Buffer): Buffer {
+  return Buffer.from(hkdfSync("sha256", secret, Buffer.alloc(0), FILE_HKDF_INFO, 32));
+}
+
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : "error";
 }
 
 function readSessionCookie(c: Context<BoardEnv>): SessionClaims | null {

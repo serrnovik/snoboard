@@ -2,6 +2,8 @@ export { VERSION } from "./version.js";
 
 export {
   fetch,
+  folderHistory,
+  MAX_HISTORY_COMMITS,
   lastCommitTouching,
   lastCommitsForPaths,
   listInitiativeFiles,
@@ -12,6 +14,8 @@ export {
 
 export type {
   CommitTouch,
+  FolderHistory,
+  HistoryCommit,
   GitCallOptions,
   GitConfig,
   InitiativeFile,
@@ -92,3 +96,17 @@ export {
   type Edit,
   type NewInitiativeInput,
 } from "./edits.js";
+export { commitsUnder, MAX_ROOT_COMMITS, type CommitWithFiles, type FileChange } from "./git-commits.js";
+export {
+  botPatterns,
+  DEFAULT_BOT_PATTERNS,
+  humansOf,
+  isBotAuthor,
+  loginFromEmail,
+  parseTrailers,
+  peopleByFolder,
+  type InitiativePeople,
+  type PeopleCommit,
+  type Person,
+  type Trailers,
+} from "./people.js";

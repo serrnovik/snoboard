@@ -19,6 +19,10 @@ import { useRepoId } from "@/features/repo/context";
 import { initiativeDetailsPath } from "@/lib/ids";
 import { DEFAULT_STALE_AFTER_DAYS, isStale, type BoardPayload } from "@/features/board/model";
 import { rateLimitNote, useBoardResource } from "@/features/board/sync";
+import { effectiveItems, type EffectiveItem } from "@/features/board/effective";
+import { useEditConfig } from "@/features/basket/edit-config";
+import { useBasket } from "@/features/basket/store";
+import type { Edit } from "snoboard/browser";
 import { NodeSearch } from "@/components/node-search";
 import { ZoomSlider } from "@/components/zoom-slider";
 import {
@@ -47,6 +51,7 @@ import {
 import "./graph.css";
 
 const DEFAULT_DONE_STATUSES = ["done"];
+const NO_EDITS: readonly Edit[] = [];
 const DIMMED_NODE_OPACITY = 0.28;
 const DONE_EDGE_OPACITY = 0.45;
 const DIMMED_EDGE_OPACITY = 0.16;
@@ -122,19 +127,28 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
   const [priority, setPriority] = useState(ALL);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const doneStatuses = board.config.doneStatuses ?? DEFAULT_DONE_STATUSES;
-  const items = useMemo(() => board.items.map(toLayoutItem), [board.items]);
+  const repoId = useRepoId();
+  const editConfig = useEditConfig();
+  const basket = useBasket(repoId);
+  const pending = editConfig.ready && editConfig.enabled ? basket.edits : NO_EDITS;
+  // Basket-aware: pending edits (e.g. a dependency moved to done) change blocked state here too.
+  const effective = useMemo(
+    () => effectiveItems(board.items, pending, board.config.doneStatuses ?? DEFAULT_DONE_STATUSES),
+    [board.items, pending, board.config.doneStatuses],
+  );
+  const items = useMemo(() => effective.map(toLayoutItem), [effective]);
   const projects = useMemo(() => uniqueSorted(board.items.map((item) => item.project)), [board.items]);
   const priorities = useMemo(() => uniqueSorted(board.items.map((item) => item.priority)), [board.items]);
   const visibleInitiatives = useMemo(() => {
     if (project === ALL && priority === ALL && !hideStale) return undefined;
     const now = Date.now();
     const staleAfterDays = board.config.staleAfterDays ?? DEFAULT_STALE_AFTER_DAYS;
-    const ids = board.items
+    const ids = effective
       .filter((item) => (project === ALL || item.project === project) && (priority === ALL || item.priority === priority))
       .filter((item) => !hideStale || !isStale(item, doneStatuses, staleAfterDays, now))
       .map((item) => item.id);
     return new Set(ids);
-  }, [board.items, board.config.staleAfterDays, doneStatuses, project, priority, hideStale]);
+  }, [effective, board.config.staleAfterDays, doneStatuses, project, priority, hideStale]);
   const layout = useMemo(
     () => layoutGraph(items, { includePhases, hideDone, doneStatuses, visibleInitiatives, linkedOnly }),
     [items, includePhases, hideDone, doneStatuses, visibleInitiatives, linkedOnly],
@@ -357,6 +371,7 @@ function InitiativeNode({ data }: NodeProps<InitiativeFlowNode>) {
           <Badge variant="outline" className="shrink-0">
             {data.blocked ? "blocked · " : ""}
             {data.status}
+            {data.pending ? " (pending)" : ""}
           </Badge>
         </BaseNodeHeader>
         <BaseNodeContent className="px-3 pt-0.5 pb-1.5">
@@ -443,13 +458,14 @@ function useDocumentDark(): boolean {
   return dark;
 }
 
-function toLayoutItem(item: BoardPayload["items"][number]): LayoutItem {
+function toLayoutItem(item: EffectiveItem): LayoutItem {
   return {
     id: item.id,
     title: item.title,
     status: item.status,
     depends_on: item.depends_on,
     phases: item.phases,
+    pending: item.committed !== undefined,
   };
 }
 

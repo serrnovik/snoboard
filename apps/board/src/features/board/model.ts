@@ -1,4 +1,12 @@
-import type { BoardItem, LegacyItem, ParsedFileError, RefInfo } from "snoboard/browser";
+import type { BoardItem, InitiativePeople, LegacyItem, ParsedFileError, RefInfo } from "snoboard/browser";
+import {
+  compareBy,
+  DEFAULT_CLOSED_AGE,
+  DEFAULT_COLUMN_SORT,
+  withinAge,
+  type ClosedAge,
+  type ColumnSort,
+} from "@/features/board/columns";
 
 export const DONE_WINDOW_DAYS = 14;
 export const DEFAULT_STALE_AFTER_DAYS = 30;
@@ -51,6 +59,8 @@ export type BoardPayload = {
   errors: ParsedFileError[];
   refs: RefInfo[];
   proposals?: Proposal[];
+  /** Creator and participants per initiative id (one git walk per snapshot). */
+  people?: Record<string, InitiativePeople>;
 };
 
 export type BoardQuery = {
@@ -215,15 +225,18 @@ export function visibleColumnItems(
   priorities: readonly string[],
   showAll: boolean,
   now: number,
+  options: { age?: ClosedAge; sort?: ColumnSort; pendingIds?: ReadonlySet<string> } = {},
 ): { visible: BoardItem[]; hidden: number; closed: boolean } {
   const matching = items
     .filter((item) => item.status === status)
-    .sort((left, right) => compareBoardItems(left, right, priorities));
+    .sort(compareBy(options.sort ?? DEFAULT_COLUMN_SORT, priorities));
   const closed = isClosedStatus(status, doneStatuses);
-  if (!closed || showAll) {
+  const age: ClosedAge = showAll ? "all" : (options.age ?? DEFAULT_CLOSED_AGE);
+  if (!closed || age === "all") {
     return { visible: matching, hidden: 0, closed };
   }
-  const visible = matching.filter((item) => isRecentlyChanged(item, now));
+  const pendingIds = options.pendingIds ?? new Set<string>();
+  const visible = matching.filter((item) => withinAge(item, age, now, pendingIds));
   return { visible, hidden: matching.length - visible.length, closed };
 }
 

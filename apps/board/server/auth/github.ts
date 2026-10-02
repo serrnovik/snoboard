@@ -22,6 +22,7 @@ import {
   ownerOfAccess,
   ownerOfSession,
   storeOwnerWriteToken,
+  storeWriteToken,
   writeCookie,
   type WriteOwner,
 } from "./write-tokens.js";
@@ -41,13 +42,16 @@ export type OAuthPending = {
   state: string;
   verifier: string;
   exp: number;
-  /** `login` signs in (read scopes only). `write` asks for repo write access for an existing session. */
+  /**
+   * `login` signs in (read scopes only, unless SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE adds `scope`).
+   * `write` asks for repo write access for an existing session.
+   */
   purpose: OAuthPurpose;
   /** Same-origin path to return to after a write grant. */
   returnTo?: string;
   /** The session that started a write grant; the callback must present the same session. */
   sessionKey?: string;
-  /** Write scope asked for, taken from the target repo's settings. */
+  /** Write scope asked for: the target repo's (write), or the broadest editable repo's (login with write). */
   scope?: GithubWriteScope;
 };
 
@@ -106,7 +110,13 @@ githubRouter.get("/github", (c) => {
   const state = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const now = Date.now();
-  const pending: OAuthPending = { state, verifier, exp: now + OAUTH_TTL_MS, purpose: "login" };
+  const pending: OAuthPending = {
+    state,
+    verifier,
+    exp: now + OAUTH_TTL_MS,
+    purpose: "login",
+    ...(config.githubLoginRequestsWrite === true ? { scope: loginWriteScope(github) } : {}),
+  };
   c.header("Cache-Control", "no-store");
   c.header("Referrer-Policy", "no-referrer");
   c.header(
@@ -248,12 +258,8 @@ githubRouter.get("/github/callback", async (c) => {
     );
   }
   const now = Date.now();
-  const session = signSession(secret, {
-    sub: login,
-    method: "github",
-    iat: now,
-    exp: now + SESSION_TTL_MS,
-  });
+  const claims: SessionClaims = { sub: login, method: "github", iat: now, exp: now + SESSION_TTL_MS };
+  const session = signSession(secret, claims);
   c.header(
     "set-cookie",
     serializeCookie(SESSION_COOKIE, session, {
@@ -263,6 +269,20 @@ githubRouter.get("/github/callback", async (c) => {
     }),
     { append: true },
   );
+  // SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE: one consent. The login token becomes this
+  // session's write token, only if GitHub really granted the write scope.
+  if (pending.scope !== undefined && config.githubLoginRequestsWrite === true) {
+    if (grantsWrite(exchanged.scope, pending.scope)) {
+      try {
+        const stored = storeWriteToken(secret, claims, accessToken, now);
+        c.header("set-cookie", writeCookie(stored.handle, stored.maxAgeSeconds), { append: true });
+      } catch {
+        // Store full: the user signs in anyway and connects write access at submit.
+      }
+    } else {
+      githubLogger.info("GitHub login did not grant the write scope; write access will be asked at submit");
+    }
+  }
   return c.redirect("/", 302);
 });
 
@@ -300,8 +320,10 @@ export function openOAuthPending(secret: Buffer, token: string, now = Date.now()
   if (!Number.isSafeInteger(exp) || exp <= now || exp - now > OAUTH_TTL_MS) return null;
   const purpose = record.purpose;
   if (purpose === "login") {
-    if (record.returnTo !== undefined || record.sessionKey !== undefined || record.scope !== undefined) return null;
-    return { state, verifier, exp, purpose };
+    if (record.returnTo !== undefined || record.sessionKey !== undefined) return null;
+    if (record.scope === undefined) return { state, verifier, exp, purpose };
+    if (record.scope !== "repo" && record.scope !== "public_repo") return null;
+    return { state, verifier, exp, purpose, scope: record.scope };
   }
   if (purpose !== "write") return null;
   const returnTo = record.returnTo;
@@ -404,7 +426,7 @@ function authorizeUrl(publicUrl: string, github: GithubAuthConfig, pending: OAut
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", github.clientId);
   url.searchParams.set("redirect_uri", `${publicUrl}/auth/github/callback`);
-  url.searchParams.set("scope", pending.purpose === "write" && pending.scope !== undefined ? pending.scope : scopeFor(github, pending.purpose));
+  url.searchParams.set("scope", scopeParam(github, pending));
   url.searchParams.set("state", pending.state);
   url.searchParams.set("code_challenge", createHash("sha256").update(pending.verifier).digest("base64url"));
   url.searchParams.set("code_challenge_method", "S256");
@@ -412,10 +434,20 @@ function authorizeUrl(publicUrl: string, github: GithubAuthConfig, pending: OAut
   return url.toString();
 }
 
-function scopeFor(github: GithubAuthConfig, purpose: OAuthPurpose): string {
-  if (purpose === "write") return writeScopeOf(github);
-  // Login never asks for a write scope.
-  return github.allowedOrgs.length > 0 ? "read:user read:org" : "read:user";
+function scopeParam(github: GithubAuthConfig, pending: OAuthPending): string {
+  if (pending.purpose === "write") return pending.scope ?? writeScopeOf(github);
+  const read = github.allowedOrgs.length > 0 ? "read:user read:org" : "read:user";
+  // Login asks for a write scope only with SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE.
+  return pending.scope === undefined ? read : `${read} ${pending.scope}`;
+}
+
+/** One consent must cover every editable repo: `repo` if any of them needs it. */
+function loginWriteScope(github: GithubAuthConfig): GithubWriteScope {
+  const scopes = listActiveRepos()
+    .filter((repo) => editSettingsFor(repo.id).enabled)
+    .map((repo) => repo.edit.githubWriteScope ?? writeScopeOf(github));
+  if (scopes.length === 0) return writeScopeOf(github);
+  return scopes.includes("repo") ? "repo" : "public_repo";
 }
 
 function openPendingCookie(c: Context<BoardEnv>, secret: Buffer): OAuthPending | null {

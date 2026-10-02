@@ -1,5 +1,5 @@
 import { Check, Clock, GitBranch, GitPullRequest, Lock } from "lucide-react";
-import type { BoardItem, Edit } from "snoboard/browser";
+import type { BoardItem, Edit, InitiativePeople } from "snoboard/browser";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAge } from "@/features/board/age";
@@ -7,6 +7,8 @@ import { formatPending } from "@/features/basket/store";
 import { priorityLabel, type Proposal } from "@/features/board/model";
 import { phaseProgress, priorityVariant, showsBranchBadge } from "@/features/board/model";
 import { IssueCount } from "@/features/issues/IssueBadge";
+import { readinessPending, type CommittedState } from "@/features/board/effective";
+import { PeopleRow } from "@/features/people/People";
 
 const blockedBadgeClass =
   "border-amber-600/50! bg-amber-500/10! text-amber-800! dark:border-amber-400/50! dark:bg-amber-400/10! dark:text-amber-200!";
@@ -28,9 +30,11 @@ export function BoardCard({
   pending = [],
   proposed = [],
   titles,
+  people,
   onOpen,
 }: {
-  item: BoardItem;
+  item: BoardItem & { committed?: CommittedState };
+  people?: InitiativePeople;
   doneStatuses: readonly string[];
   defaultBranch: string | null;
   stale?: boolean;
@@ -42,6 +46,9 @@ export function BoardCard({
   const progress = phaseProgress(item, doneStatuses);
   const variant = priorityVariant(item.priority);
   const blocked = item.blockedBy.length > 0;
+  // Pending basket edits (e.g. a dependency moved to done) changed blocked/ready.
+  const readyPending = readinessPending(item);
+  const pendingSuffix = readyPending ? " (pending)" : "";
   const branch = showsBranchBadge(item.sourceRef, defaultBranch);
   const age = formatAge(item.updatedAt);
 
@@ -81,6 +88,7 @@ export function BoardCard({
           </time>
         ) : null}
       </p>
+      {people !== undefined && people.participants.length > 0 ? <PeopleRow people={people} /> : null}
       {item.labels !== undefined && item.labels.length > 0 ? (
         <ul className="flex flex-wrap gap-1">
           {item.labels.map((label) => (
@@ -122,22 +130,27 @@ export function BoardCard({
                 <button
                   type="button"
                   className="inline-flex max-w-full rounded-4xl"
-                  aria-label={`Blocked by ${item.blockedBy.join(", ")}`}
+                  aria-label={`Blocked by ${item.blockedBy.join(", ")}${pendingSuffix}`}
                 />
               }
             >
               <Badge variant="outline" className={blockedBadgeClass}>
                 <Lock aria-hidden="true" data-icon="lock" />
-                blocked
+                blocked{pendingSuffix}
               </Badge>
             </TooltipTrigger>
             <TooltipContent>Blocked by {item.blockedBy.join(", ")}</TooltipContent>
           </Tooltip>
         ) : null}
         {!blocked && item.isReady ? (
-          <Badge variant="outline" className={readyBadgeClass}>
+          <Badge
+            variant="outline"
+            className={readyBadgeClass}
+            data-testid="ready-badge"
+            title={readyPending ? "Ready once the basket is submitted" : undefined}
+          >
             <Check aria-hidden="true" data-icon="check" />
-            ready
+            ready{pendingSuffix}
           </Badge>
         ) : null}
         {stale ? (

@@ -282,3 +282,45 @@ function drag(handle: HTMLElement, clientX: number, clientY: number) {
   pointerMove(clientX, clientY);
   pointerUp(clientX, clientY);
 }
+
+describe("basket-aware board", () => {
+  it("shows a dependent as ready (pending) once its dependency is moved to done in the basket", async () => {
+    localStorage.setItem(
+      basketStorageKey("default"),
+      JSON.stringify([{ kind: "setStatus", id: "acme-001", from: "in-progress", to: "done" }]),
+    );
+    resetBasketStore();
+    mockBoard(
+      payload([
+        item({ id: "acme-001", title: "Dependency", status: "in-progress", priority: "p1", isReady: true }),
+        item({ id: "acme-002", title: "Dependent", status: "planned", priority: "p1", depends_on: ["acme-001"], blockedBy: ["acme-001"] }),
+      ]),
+      true,
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    const card = await screen.findByTestId("card-acme-002");
+    await waitFor(() => expect(within(card).getByTestId("ready-badge").textContent).toContain("ready (pending)"));
+    expect(within(card).queryByText(/blocked/)).toBeNull();
+    expect(cardIds("done")).toEqual(["acme-001"]);
+  });
+
+  it("offers an only-this-session age that shows just pending moves", async () => {
+    localStorage.setItem(
+      basketStorageKey("default"),
+      JSON.stringify([{ kind: "setStatus", id: "acme-001", from: "in-progress", to: "done" }]),
+    );
+    resetBasketStore();
+    mockBoard(
+      payload([
+        item({ id: "acme-001", title: "Moved", status: "in-progress", priority: "p1", updated: "2026-01-01", updatedAt: "2026-01-01T00:00:00.000Z" }),
+        item({ id: "acme-003", title: "Recent done", status: "done", priority: "p1" }),
+      ]),
+      true,
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    const age = await screen.findByRole("combobox", { name: "Show Done changed within" });
+    await waitFor(() => expect(within(age).queryByRole("option", { name: "Only this session's changes" })).not.toBeNull());
+    fireEvent.change(age, { target: { value: "session" } });
+    await waitFor(() => expect(cardIds("done")).toEqual(["acme-001"]));
+  });
+});

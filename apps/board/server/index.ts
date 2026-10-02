@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { api } from "./api.js";
 import { bootAuth } from "./auth/env.js";
+import { bootWriteTokens } from "./auth/write-tokens.js";
 import { bootEditConfig } from "./edit-env.js";
 import { MAX_SUBMIT_BODY_BYTES } from "snoboard";
 import { MAX_VALIDATE_BODY_BYTES } from "./edits/prepare.js";
@@ -14,6 +15,7 @@ import { isBoardReady } from "./store.js";
 export const app = new Hono<BoardEnv>();
 
 bootAuth(process.env);
+bootWriteTokens();
 bootEditConfig(process.env);
 
 // Every endpoint takes at most a small form or JSON body. bodyLimit counts

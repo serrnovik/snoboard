@@ -70,7 +70,7 @@ SNOBOARD_ALLOWED_GITHUB_LOGINS=ada,grace
 SNOBOARD_ALLOWED_GITHUB_ORGS=acme
 ```
 
-Organization checks call the GitHub API and need the `read:org` scope. Snoboard requests `read:user`, and adds `read:org` when `SNOBOARD_ALLOWED_GITHUB_ORGS` is set. The GitHub access token from login is not stored.
+Organization checks call the GitHub API and need the `read:org` scope. Snoboard requests `read:user`, and adds `read:org` when `SNOBOARD_ALLOWED_GITHUB_ORGS` is set. The GitHub access token from login is not stored, unless [`SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE`](#write-scope-at-login) is on.
 
 `SNOBOARD_GITHUB_TOKEN_FILE` is separate from the OAuth client secret. It is an optional fine-grained token used only to read pull request state and checks. Give it read access to the repository and nothing else.
 
@@ -90,12 +90,54 @@ edits (`GET /auth/github/write`), so people who only look at the board never han
   Per-repository GitHub App user tokens are a later option.
 - **Checks.** The write callback needs the same board session that started it, and the GitHub login must equal the
   session's login. It never signs anyone in. After the grant, the browser returns to a same-origin path only.
-- **Storage.** The token is kept in server memory only, AES-256-GCM encrypted with a key derived from the session
-  secret, for at most one hour and never longer than the session; one token per session. The browser holds only a
-  random handle in the httpOnly cookie `snoboard_gh_write` (path `/api`). The token is never put in a cookie, a
-  log line, or a response. `DELETE /auth/github/write` and logout drop it.
-- **Replicas.** Tokens live in one process. A restart loses them (people reconnect), and several replicas need
-  sticky sessions. Run one replica when editing is on.
+- **Storage.** The token is kept in server memory, AES-256-GCM encrypted with a key derived from the session
+  secret, for `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` (default one hour) and never longer than the session; one token per
+  session. The browser holds only a random handle in the httpOnly cookie `snoboard_gh_write` (path `/api`). The token
+  is never put in a cookie, a log line, or a response. `DELETE /auth/github/write` and logout drop it.
+- **Seamless connect.** When Submit needs a write token, the dialog shows "Connecting to GitHub…", remembers the
+  repository, submit mode and a fingerprint of the basket in `sessionStorage` (never the token), and goes to
+  `/auth/github/write?return=<this page>?resumeSubmit=1`. GitHub skips its prompt for an app the person already
+  authorized, so they are back at once: the dialog reopens, checks the basket again and submits it if it did not
+  change (otherwise it only reopens). It redirects automatically at most once per page load; the "Connect GitHub"
+  link stays as a fallback.
+- **Replicas.** Tokens live in one process. With the default memory store a restart loses them (people reconnect),
+  and several replicas need sticky sessions. Run one replica when editing is on.
+
+### Write token lifetime and storage
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` | `1h` | `30m`, `8h`, or seconds. At least `1m`, at most `12h`; never past the session (or Access token). |
+| `SNOBOARD_GITHUB_WRITE_TOKEN_STORE` | `memory` | `encrypted-file` also keeps tokens in `<SNOBOARD_DATA_DIR>/github-write-tokens.enc`, so a restart keeps them. |
+| `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE` | `false` | `github` mode only, see [Write scope at login](#write-scope-at-login). |
+
+**Trade-off.** A longer TTL or a persisted store means fewer "Connect GitHub" round trips. It also means that if the
+server (process memory, or the data directory plus the session secret) is compromised, more live write tokens are
+exposed, for longer. Revoking the OAuth app on GitHub, or logging out, ends a token early.
+
+The `encrypted-file` store:
+
+- seals the whole file with AES-256-GCM under a key derived (HKDF-SHA256) from the session secret, separate from
+  the in-memory key; each token inside is also still encrypted with the in-memory key. No token, login or handle is
+  in clear on disk;
+- keys entries by session key (a hash of the signed session), so a token only opens for the session that connected
+  it, exactly as in memory;
+- writes atomically (temp file with mode `0600`, then rename), drops expired entries on load, and rewrites the
+  file on connect, logout and `DELETE /auth/github/write`;
+- requires `SNOBOARD_SESSION_SECRET_FILE`. Boot fails if it is missing (on Cloudflare Access write-connect a random
+  per-process key would make the file unreadable after a restart). A file that cannot be decrypted (secret rotated)
+  is discarded with a warning; people reconnect. Rotating the session secret therefore also revokes stored tokens;
+- lives where the data directory lives. On an `emptyDir` it survives container restarts but not a pod moving to
+  another node; mount a persistent volume for more. It does not make several replicas share tokens.
+
+### Write scope at login
+
+`SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE=true` (GitHub sign-in only) asks for the write scope in the sign-in consent
+itself: `read:user repo` (or `public_repo` when every editable repository asks for `public_repo`). If GitHub grants
+it, the login token is kept as that session's write token, under the same storage rules, so there is no separate
+connect step. If the person deselects the write scope, they are signed in without write access and asked at submit.
+Default `false`: then sign-in never asks for write access, and people who only look at the board never hand Snoboard
+a write token. Turn it on only when the people signing in are the people editing.
 
 Password deployments never offer this flow. Cloudflare Access deployments can, with the explicit switch in
 [Connect GitHub at submit](#connect-github-at-submit-cloudflare-access).
@@ -159,10 +201,11 @@ SNOBOARD_GITHUB_WRITE_SCOPE=public_repo                       # public repositor
 - **Checks.** `/auth/github/write` and the callback verify the `Cf-Access-Jwt-Assertion` themselves. The callback must
   come from the same Access login that started the flow; it checks the token with `GET /user` and records that login.
   There is no login-equality check, because the Access identity is an email, not a GitHub login.
-- **Storage.** As for GitHub sign-in: AES-256-GCM in memory, at most one hour and never past the Access token's
-  expiry, keyed by the Access login (email, subject, token issue time). The token and the GitHub login are kept
+- **Storage.** As for GitHub sign-in: AES-256-GCM in memory (optionally the encrypted file), for
+  `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` and never past the Access token's expiry, keyed by the Access login (email, subject, token issue time). The token and the GitHub login are kept
   together with the Access email. A different Access user, or the same person after signing out of Access and back in,
   cannot use it. The board's Sign out link drops it (`DELETE /auth/github/write`) before going to
   `/cdn-cgi/access/logout`.
 - **Session secret.** Without `SNOBOARD_SESSION_SECRET_FILE`, a random key is made at startup; a restart already forgets
-  every write token, so nothing else is lost.
+  every write token, so nothing else is lost. `SNOBOARD_GITHUB_WRITE_TOKEN_STORE=encrypted-file` needs the file.
+  Note that the Access token's own expiry (often 24h or less) still caps how long a connected token lives.

@@ -39,7 +39,7 @@ export const EDIT_BRANCH_PREFIX = "snoboard/edits-";
 export const SNOBOARD_LABEL = "snoboard";
 const HOUR_MS = 60 * 60 * 1000;
 const MAX_BRANCHES_CHECKED = 20;
-const PROJECT_SEGMENT = /^[a-z0-9][a-z0-9_-]*$/;
+const PROJECT_SEGMENT = /^[a-z0-9_][a-z0-9_-]*$/;
 const FOLDER_SEGMENT = /^(\d{3})-[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 // CSRF tokens are HMACs of the caller's subject under a per-process key.

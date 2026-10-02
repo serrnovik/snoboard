@@ -159,3 +159,18 @@ function syntheticChain(count: number): LayoutItem[] {
   }
   return items;
 }
+
+describe("pending basket state", () => {
+  it("marks pending initiatives and uses the effective status for blocked", () => {
+    const result = layoutGraph(
+      [
+        { id: "acme-001", title: "Dep", status: "done", depends_on: [], pending: true },
+        { id: "acme-002", title: "Dependent", status: "planned", depends_on: ["acme-001"], pending: true },
+      ],
+      { includePhases: false, hideDone: false, doneStatuses: ["done"] },
+    );
+    const dependent = result.nodes.find((node) => node.id === "acme-002");
+    expect(dependent?.data.blocked).toBe(false);
+    expect(dependent?.data.pending).toBe(true);
+  });
+});

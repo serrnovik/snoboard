@@ -568,3 +568,68 @@ async function findMissingObjects(
     return [...shas];
   }
 }
+
+export interface HistoryCommit {
+  sha: string;
+  date: string;
+  author: string;
+  subject: string;
+}
+
+export interface FolderHistory {
+  commits: HistoryCommit[];
+  /** True when older commits exist beyond `skip + limit`. */
+  hasMore: boolean;
+}
+
+/** Hard cap on commits returned by one `folderHistory` call. */
+export const MAX_HISTORY_COMMITS = 100;
+const MAX_HISTORY_FIELD = 200;
+const BACKSLASH = String.fromCharCode(92);
+
+/**
+ * Commits on `ref` that touched `folder`, newest first. Commit metadata only:
+ * no rename detection (`--follow` reads blobs, and works on single files only),
+ * and GIT_NO_LAZY_FETCH so a blob-less partial clone never goes to the network.
+ */
+export async function folderHistory(
+  repoDir: string,
+  ref: string,
+  folder: string,
+  page: { limit: number; skip?: number },
+  options?: GitCallOptions,
+): Promise<FolderHistory> {
+  const normalized = folder.split(BACKSLASH).join("/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (normalized.length === 0 || ref.startsWith("-")) throw new Error("invalid history request");
+  const limit = Math.max(1, Math.min(MAX_HISTORY_COMMITS, Math.floor(page.limit)));
+  const skip = Math.max(0, Math.floor(page.skip ?? 0));
+  const result = await git(
+    repoDir,
+    [
+      "log",
+      "--no-renames",
+      "--no-show-signature",
+      `--max-count=${limit + 1}`,
+      `--skip=${skip}`,
+      "--format=%H%x1f%cI%x1f%an%x1f%s%x1e",
+      ref,
+      "--",
+      normalized,
+    ],
+    { ...options, env: { ...options?.env, GIT_NO_LAZY_FETCH: "1" } },
+  );
+  const commits: HistoryCommit[] = [];
+  for (const record of result.stdout.toString("utf8").split("\x1e")) {
+    const fields = record.replace(/^\r?\n/, "").split("\x1f");
+    if (fields.length < 4) continue;
+    const [sha, date, author, subject] = fields as [string, string, string, string];
+    if (!/^[0-9a-f]{40,64}$/.test(sha)) continue;
+    commits.push({
+      sha,
+      date: date.trim(),
+      author: author.slice(0, MAX_HISTORY_FIELD),
+      subject: subject.slice(0, MAX_HISTORY_FIELD),
+    });
+  }
+  return { commits: commits.slice(0, limit), hasMore: commits.length > limit };
+}

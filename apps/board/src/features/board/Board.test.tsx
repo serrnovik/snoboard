@@ -248,10 +248,12 @@ describe("board view", () => {
     expect(await screen.findByTestId("card-acme-001")).toBeTruthy();
     expect(screen.queryByTestId("card-acme-008")).toBeNull();
     expect(screen.getByTestId("count-done").textContent).toBe("2 · 1 shown");
-    await user.click(screen.getByRole("link", { name: "Show all (2)" }));
-    expect(window.location.search).toContain("closed=all");
+    const age = screen.getByRole("combobox", { name: "Show Done changed within" });
+    expect((age as HTMLSelectElement).value).toBe("2w");
+    await user.selectOptions(age, "all");
     expect(cardIds("done")).toEqual(["acme-008", "acme-001"]);
     expect(screen.getByTestId("count-done").textContent).toBe("2");
+    expect(JSON.parse(localStorage.getItem("snoboard:closed-age:v1:default") ?? "{}")).toEqual({ done: "all" });
   });
 
   it("still honours the legacy done=all URL", async () => {
@@ -265,7 +267,73 @@ describe("board view", () => {
     );
     render(<Board pollIntervalMs={0} now={NOW} />);
     expect(await screen.findByTestId("card-acme-008")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Show recent" })).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "Show Done changed within" }) as HTMLSelectElement).value).toBe("all");
+  });
+
+  it("keeps closed=all URLs working and drops the override when a column age is picked", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/?closed=all");
+    mockBoard(
+      payload({
+        items: [
+          item({ id: "acme-008", title: "Old done", status: "done", priority: "p0", updated: "2026-08-01", updatedAt: "2026-08-01T00:00:00.000Z" }),
+          item({ id: "acme-009", title: "Week-old done", status: "done", priority: "p0", updated: "2026-09-25", updatedAt: "2026-09-25T00:00:00.000Z" }),
+        ],
+      }),
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-008")).toBeTruthy();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Show Done changed within" }), "1d");
+    expect(new URLSearchParams(window.location.search).get("closed")).toBeNull();
+    expect(within(screen.getByTestId("column-done")).queryAllByTestId(/^card-/)).toEqual([]);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Show Done changed within" }), "1w");
+    expect(cardIds("done")).toEqual(["acme-009"]);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Show Done changed within" }), "1m");
+    expect(cardIds("done")).toEqual(["acme-009"]);
+  });
+
+  it("restores the stored column age and sort per repo", async () => {
+    localStorage.setItem("snoboard:closed-age:v1:default", JSON.stringify({ done: "all", bogus: "x" }));
+    localStorage.setItem("snoboard:column-sort:v1:default", JSON.stringify({ planned: "title" }));
+    mockBoard(
+      payload({
+        items: [
+          item({ id: "acme-008", title: "Old done", status: "done", priority: "p0", updated: "2026-08-01", updatedAt: "2026-08-01T00:00:00.000Z" }),
+          item({ id: "acme-001", title: "Zulu", status: "planned", priority: "p0" }),
+          item({ id: "acme-002", title: "alpha", status: "planned", priority: "p3" }),
+        ],
+      }),
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-008")).toBeTruthy();
+    expect(cardIds("planned")).toEqual(["acme-002", "acme-001"]);
+    expect((screen.getByRole("combobox", { name: "Sort Planned" }) as HTMLSelectElement).value).toBe("title");
+  });
+
+  it("sorts each column by priority, last change, title or id", async () => {
+    const user = userEvent.setup();
+    mockBoard(
+      payload({
+        items: [
+          item({ id: "acme-010", title: "Charlie", status: "planned", priority: "p2", updated: "2026-09-01", updatedAt: "2026-09-28T00:00:00.000Z" }),
+          item({ id: "acme-002", title: "bravo", status: "planned", priority: "p0", updated: "2026-09-10", updatedAt: "2026-09-10T00:00:00.000Z" }),
+          item({ id: "acme-003", title: "Alpha", status: "planned", priority: "p1", updated: "2026-09-20", updatedAt: "2026-09-20T00:00:00.000Z" }),
+          item({ id: "acme-020", title: "Other", status: "in-progress", priority: "p3" }),
+        ],
+      }),
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-010")).toBeTruthy();
+    expect(cardIds("planned")).toEqual(["acme-002", "acme-003", "acme-010"]);
+    const sort = screen.getByRole("combobox", { name: "Sort Planned" });
+    await user.selectOptions(sort, "changed");
+    expect(cardIds("planned")).toEqual(["acme-010", "acme-003", "acme-002"]);
+    await user.selectOptions(sort, "title");
+    expect(cardIds("planned")).toEqual(["acme-003", "acme-002", "acme-010"]);
+    await user.selectOptions(sort, "id");
+    expect(cardIds("planned")).toEqual(["acme-002", "acme-003", "acme-010"]);
+    expect(JSON.parse(localStorage.getItem("snoboard:column-sort:v1:default") ?? "{}")).toEqual({ planned: "id" });
+    expect((screen.getByRole("combobox", { name: "Sort In progress" }) as HTMLSelectElement).value).toBe("priority");
   });
 
   it("limits parked and dropped columns to recent changes with per-column toggles", async () => {
@@ -299,14 +367,13 @@ describe("board view", () => {
     expect(screen.getByTestId("count-planned").textContent).toBe("1");
 
     const parked = screen.getByTestId("column-parked");
-    await user.click(within(parked).getByRole("link", { name: "Show all (3)" }));
-    expect(new URLSearchParams(window.location.search).get("closed")).toBe("parked");
+    await user.selectOptions(within(parked).getByRole("combobox", { name: "Show Parked changed within" }), "all");
     expect(cardIds("parked")).toEqual(["acme-002", "acme-003", "acme-004"]);
     expect(within(screen.getByTestId("column-dropped")).queryAllByTestId(/^card-/)).toEqual([]);
 
-    await user.click(within(parked).getByRole("link", { name: "Show recent" }));
-    expect(new URLSearchParams(window.location.search).get("closed")).toBeNull();
+    await user.selectOptions(within(parked).getByRole("combobox", { name: "Show Parked changed within" }), "2w");
     expect(cardIds("parked")).toEqual(["acme-002"]);
+    expect(within(screen.getByTestId("column-planned")).queryByRole("combobox", { name: /changed within/ })).toBeNull();
   });
 
   it("folds and unfolds columns, persisted per repo", async () => {

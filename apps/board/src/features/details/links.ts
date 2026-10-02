@@ -42,3 +42,17 @@ export function forgePrUrl(forge: ForgeLinkConfig, pr: number): string {
     pr: String(pr),
   });
 }
+
+/**
+ * Commit page on the forge, derived from the pull request template
+ * (`.../pull/{pr}` becomes `.../commit/{sha}`). Null unless it is an https URL.
+ */
+export function forgeCommitUrl(forge: ForgeLinkConfig, sha: string): string | null {
+  if (!/^[0-9a-f]{7,64}$/.test(sha) || !forge.prUrl.includes("/pull/{pr}")) return null;
+  const url = applyForgeTemplate(forge.prUrl.replace("/pull/{pr}", "/commit/{sha}"), { repo: forge.repo, sha });
+  try {
+    return new URL(url).protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}

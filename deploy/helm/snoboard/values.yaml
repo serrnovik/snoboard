@@ -42,6 +42,17 @@ env:
   # cloudflare-access only: "true" uses the GitHub OAuth client (id above, secret file below) solely so
   # people connect their own GitHub write token when they submit edits. Needs SNOBOARD_PUBLIC_URL.
   SNOBOARD_GITHUB_WRITE_CONNECT: "false"
+  # How long a GitHub write token is kept after connecting: 30m, 8h, ... Default 1h, max 12h, never past the
+  # sign-in session. Longer means fewer "Connect GitHub" round trips, and a longer window if the server is compromised.
+  # SNOBOARD_GITHUB_WRITE_TOKEN_TTL: "8h"
+  # memory (default) or encrypted-file: write tokens also go to <SNOBOARD_DATA_DIR>/github-write-tokens.enc
+  # (AES-256-GCM, key derived from the session secret, mode 0600) and survive restarts. Needs
+  # SNOBOARD_SESSION_SECRET_FILE. The chart's data dir is an emptyDir: the file survives container restarts,
+  # not pod rescheduling; mount a volume there for more.
+  # SNOBOARD_GITHUB_WRITE_TOKEN_STORE: "encrypted-file"
+  # github mode only: login asks for the write scope up front and keeps that token as the write token
+  # (one consent, no separate connect). Everyone who signs in hands over a write token.
+  # SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE: "true"
 
 # Name of a Secret to mount as files. Leave empty to skip the mount.
 # The Secret must contain every key listed in secretFiles.

@@ -57,5 +57,6 @@ export {
   type GraphNode,
 } from "./graph.js";
 export type { BoardItem, LegacyItem, ParsedFileError, Snapshot } from "./merge.js";
-export type { RefInfo } from "./git.js";
+export type { HistoryCommit, RefInfo } from "./git.js";
+export type { InitiativePeople, Person } from "./people.js";
 export { EditSchema, MAX_INITIATIVE_BODY_LENGTH, type Edit } from "./edit-schema.js";
