@@ -48,6 +48,24 @@ test("README screenshots", async ({ page }) => {
   await page.getByRole("option", { name: "done", exact: true }).click();
   await expect(page.getByTestId("basket-count")).toHaveText("1");
   await shot(page, "details.png");
+
+  // Report viewer: the markdown report, then its sandboxed HTML twin and back.
+  await expect(details.getByTestId("phase-reports-1")).toBeVisible();
+  await details.getByTestId("report-open-final.report").click();
+  const report = page.getByTestId("report-dialog");
+  await expect(report.getByRole("heading", { name: "Billing rollout report" })).toBeVisible();
+  await expect(report.getByRole("cell", { name: "Invoices sent on time" })).toBeVisible();
+  await shot(page, "reports.png");
+  await report.getByTestId("report-format-html").click();
+  const frame = report.getByTestId("report-frame");
+  await expect(frame).toHaveAttribute("sandbox", "");
+  await expect(page.frameLocator('[data-testid="report-frame"]').getByText("invoices on time")).toBeVisible();
+  await report.getByRole("link", { name: "phase 1 report" }).waitFor({ state: "detached" });
+  await report.getByTestId("report-format-md").click();
+  await report.getByRole("link", { name: "phase 1 report" }).click();
+  await expect(report.getByRole("heading", { name: "Phase 1: Metering" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(report).toBeHidden();
   await page.keyboard.press("Escape");
 
   await page.goto("/?open=platform-002");

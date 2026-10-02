@@ -1,4 +1,4 @@
-import { Check, Clock, GitBranch, GitPullRequest, Lock } from "lucide-react";
+import { Check, Clock, FileText, GitBranch, GitPullRequest, Lock } from "lucide-react";
 import type { BoardItem, Edit, InitiativePeople } from "snoboard/browser";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -123,6 +123,7 @@ export function BoardCard({
       ) : null}
       <div className="flex min-w-0 flex-wrap gap-1">
         <IssueCount issues={item.issues} />
+        <ReportCount count={item.reports?.length ?? 0} />
         {blocked ? (
           <Tooltip>
             <TooltipTrigger
@@ -220,6 +221,18 @@ function proposedValue(value: string, titles: ReadonlyMap<string, string> | unde
       return `${part} · ${title}`;
     })
     .join(", ");
+}
+
+/** Tiny "N reports" indicator; the list comes with the board payload, so no extra request. */
+function ReportCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  const label = count === 1 ? "1 report" : `${count} reports`;
+  return (
+    <Badge variant="outline" data-testid="report-count" title={label} className="gap-1 text-muted-foreground!">
+      <FileText aria-hidden="true" className="size-3" />
+      {label}
+    </Badge>
+  );
 }
 
 function proposedPulls(proposals: readonly Proposal[]): { number: number; url: string }[] {

@@ -6,7 +6,9 @@ export {
   MAX_HISTORY_COMMITS,
   lastCommitTouching,
   lastCommitsForPaths,
+  isReportFile,
   listInitiativeFiles,
+  listInitiativeTree,
   listRefs,
   prefetchMissingBlobs,
   readBlobs,
@@ -19,8 +21,17 @@ export type {
   GitCallOptions,
   GitConfig,
   InitiativeFile,
+  InitiativeTree,
   RefInfo,
 } from "./git.js";
+export {
+  groupReports,
+  MAX_REPORT_BYTES,
+  MAX_REPORTS_PER_INITIATIVE,
+  reportPhase,
+  type ReportEntry,
+  type ReportFormat,
+} from "./reports.js";
 export { ConfigSchema, loadConfig, type Config } from "./config.js";
 export {
   InitiativeFrontmatterSchema,

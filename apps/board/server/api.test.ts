@@ -414,6 +414,97 @@ describe("read-only API", () => {
     }
   });
 
+  it("serves listed reports with locked-down headers, and nothing else", async () => {
+    const files = await readTree(demoRoot);
+    const configText = files[".snoboard.yml"];
+    if (configText === undefined) throw new Error("demo repo is missing .snoboard.yml");
+    const config = loadConfig(configText);
+    const folder = "initiatives/acme/001-onboarding";
+    const html = '<h1>Phase 1</h1><script>alert(1)</script><img src="https://tracker.example/x.png">';
+    const repo = await createTmpRepo({
+      commits: [
+        {
+          message: "demo",
+          files: {
+            ...files,
+            [`${folder}/reports/phase-1.report.md`]: "# Phase 1\n\nDone.\n",
+            [`${folder}/reports/phase-1.report.html`]: html,
+            [`${folder}/reports/review/plan.md`]: "# Plan\n",
+            [`${folder}/reports/huge.md`]: "x".repeat(2 * 1024 * 1024 + 1),
+            [`${folder}/reports/shot.png`]: "not an image",
+            [`${folder}/reports/visuals/real.png`]: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
+            [`${folder}/secret.md`]: "# Secret\n",
+            "initiatives/acme/002-billing/reports/other.md": "# Other\n",
+          },
+        },
+      ],
+    });
+    try {
+      const snapshot = await buildSnapshot(repo.dir, config);
+      seedStore(snapshot, config);
+      setInitiativeRepoDir(repo.dir);
+      const board = (await (await app.request("/api/board", authed())).json()) as {
+        items: Array<{ id: string; reports?: Array<{ name: string; formats: string[]; phase?: number }> }>;
+      };
+      expect(board.items.find((item) => item.id === "acme-001")?.reports).toEqual([
+        { name: "huge", formats: ["md"] },
+        { name: "phase-1.report", formats: ["md", "html"], phase: 1 },
+        { name: "review/plan", formats: ["md"] },
+      ]);
+
+      const base = "/api/repos/default/initiatives/acme-001/reports";
+      const md = await app.request(`${base}/phase-1.report.md`, authed());
+      expect(md.status).toBe(200);
+      expect(md.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(md.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(md.headers.get("content-security-policy")).toContain("default-src 'none'");
+      expect(await md.text()).toBe("# Phase 1\n\nDone.\n");
+
+      const page = await app.request(`${base}/phase-1.report.html`, authed());
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+      const csp = page.headers.get("content-security-policy") ?? "";
+      expect(csp).toContain("default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+      expect(csp).toContain("sandbox");
+      expect(csp).not.toContain("script-src");
+      expect(await page.text()).toBe(html);
+
+      const nested = await app.request(`${base}/review/plan.md`, authed());
+      expect(nested.status).toBe(200);
+      const image = await app.request(`${base}/visuals/real.png`, authed());
+      expect(image.status).toBe(200);
+      expect(image.headers.get("content-type")).toBe("image/png");
+
+      const anonymous = await app.request(`${base}/phase-1.report.md`);
+      expect(anonymous.status).toBe(401);
+
+      for (const route of [
+        `${base}/huge.md`,
+        `${base}/shot.png`,
+        `${base}/missing.md`,
+        `${base}/phase-1.report.htm`,
+        `${base}/..%2Fsecret.md`,
+        `${base}/%2e%2e%2fsecret.md`,
+        `${base}/..%2F..%2F002-billing%2Freports%2Fother.md`,
+        `${base}/review/..%2F..%2Fsecret.md`,
+        "/api/repos/default/initiatives/acme-001/reports/other.md",
+        "/api/repos/default/initiatives/acme-999/reports/phase-1.report.md",
+        "/api/repos/nope/initiatives/acme-001/reports/phase-1.report.md",
+      ]) {
+        const refused = await app.request(route, authed());
+        expect(refused.status, route).toBe(404);
+        expect(refused.headers.get("content-type") ?? "", route).toContain("application/json");
+        expect(refused.headers.get("x-content-type-options"), route).toBe("nosniff");
+      }
+      const traversal = await app.request(`${base}/../../secret.md`, authed());
+      expect(traversal.status).toBe(404);
+    } finally {
+      setInitiativeRepoDir(undefined);
+      await repo.remove();
+    }
+  });
+
   it("rejects unauthenticated, oversized, and oversized edit batches", async () => {
     const anonymous = await app.request("/api/edits/validate", {
       method: "POST",

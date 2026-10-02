@@ -17,6 +17,8 @@ import { PeopleDetails } from "@/features/people/People";
 import { useBoardView } from "@/features/board/view-store";
 import { readinessPending } from "@/features/board/effective";
 import { SummaryMarkdown } from "./markdown.js";
+import { ReportChip, ReportDialog, ReportsSection, useReportViewer } from "./ReportViewer";
+import { phaseChipLabel, splitReports } from "./report-links.js";
 import { readLinks } from "./ListEditors";
 import { resolveImageSrc } from "@/features/attachments/images";
 import { isSafeLinkUrl } from "snoboard/browser";
@@ -166,6 +168,8 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
   const pendingReadiness = effective !== undefined && readinessPending(effective);
   const pendingStatus =
     effective?.committed !== undefined && effective.committed.status !== effective.status ? effective.status : null;
+  const reportGroups = splitReports(item);
+  const viewer = useReportViewer(item);
   return (
     <div className={variant === "sheet" ? "flex flex-col gap-4 px-4 pb-4" : "flex flex-col gap-4"}>
       <EditControls item={item} />
@@ -177,6 +181,15 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
         />
       </section>
       <ExternalLinks links={item.links} />
+      <ReportsSection reports={reportGroups.initiative} onOpen={viewer.openReport} />
+      <ReportDialog
+        item={item}
+        repoId={repoId}
+        forge={forge}
+        selection={viewer.selection}
+        onSelect={viewer.setSelection}
+        onClose={() => viewer.setSelection(null)}
+      />
       {issues.length > 0 ? (
         <section className="flex flex-col gap-2" data-testid="issue-list">
           <h2 className="text-sm font-medium">Issues</h2>
@@ -206,11 +219,24 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
               <tbody>
                 {item.phases.map((phase) => {
                   const enrichment = phase.pr === undefined ? undefined : item.prs?.[String(phase.pr)];
+                  const phaseReports = reportGroups.byPhase.get(phase.id) ?? [];
                   return (
                     <tr key={phase.id} className="border-b border-border/60">
                       <td className="py-2 pr-3">
                         <span className="text-muted-foreground">{phase.id}. </span>
                         {phase.title}
+                        {phaseReports.length > 0 ? (
+                          <span className="mt-1 flex flex-wrap gap-1" data-testid={`phase-reports-${phase.id}`}>
+                            {phaseReports.map((report) => (
+                              <ReportChip
+                                key={report.name}
+                                report={report}
+                                label={phaseChipLabel(report.name)}
+                                onOpen={viewer.openReport}
+                              />
+                            ))}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="py-2 pr-3">{phase.status}</td>
                       <td className="py-2">

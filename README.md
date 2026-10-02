@@ -48,6 +48,15 @@ Open a card to see its summary, issues with their live title and open or closed 
 
 ![Details panel with edit controls, issues and links](docs/img/details.png)
 
+### Reports
+
+Files under `<initiative folder>/reports/` (`phase-1.report.md`, `final.report.md` and their `.report.html` twins)
+show in the details panel: initiative reports in a **Reports** section, phase reports as chips on their phase, and a
+"N reports" mark on the card. They open in a large viewer with previous/next and an md/html switch. HTML reports
+render statically in a sandbox, without scripts. See [docs/configuration.md](docs/configuration.md#reports).
+
+![Report viewer with a markdown report](docs/img/reports.png)
+
 ### Editing basket
 
 Edits collect in a basket in the browser. Nothing is written until you submit.
@@ -167,5 +176,6 @@ The chart runs as a non-root user with a read-only root filesystem and health an
 | Commands and exit codes | [docs/cli.md](docs/cli.md) |
 | Sign-in modes and write tokens | [docs/auth.md](docs/auth.md) |
 | Edit modes, images, bot token, submit flow, limits | [docs/editing.md](docs/editing.md) |
+| Initiative and phase reports, the report viewer | [docs/configuration.md](docs/configuration.md#reports) |
 | Environment variables, Docker, Helm, health checks | [docs/deploy.md](docs/deploy.md) |
 | Reporting vulnerabilities, threat model for the write path | [SECURITY.md](SECURITY.md) |

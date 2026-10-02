@@ -1,7 +1,7 @@
 import type { Config } from "./config.js";
 import { changedSinceMergeBase,
   lastCommitsForPaths,
-  listInitiativeFiles,
+  listInitiativeTree,
   listRefs,
   prefetchMissingBlobs,
   readBlobs,
@@ -11,6 +11,7 @@ import { changedSinceMergeBase,
 } from "./git.js";
 import { blockedBy, buildGraph, isReady, type Graph } from "./graph.js";
 import { parseInitiativeFile } from "./parse.js";
+import { groupReports, type ReportEntry } from "./reports.js";
 import type { InitiativeFrontmatter } from "./schema.js";
 
 export interface SnapshotOptions extends GitCallOptions {
@@ -29,6 +30,8 @@ export type BoardItem = InitiativeFrontmatter & {
   isReady: boolean;
   blockedBy: string[];
   onBranches: string[];
+  /** Files under the folder's `reports/` at the source ref tip; listed from trees only. */
+  reports?: ReportEntry[];
 };
 
 export type LegacyItem = {
@@ -141,14 +144,14 @@ export async function buildSnapshot(
   const defaultRefInfo = refs.find((ref) => ref.isDefault);
   const listed = await Promise.all(
     refs.map(async (ref) => {
-      const [files, touches, changed] = await Promise.all([
-        listInitiativeFiles(repoDir, ref.sha, config, options),
+      const [tree, touches, changed] = await Promise.all([
+        listInitiativeTree(repoDir, ref.sha, config, options),
         lastCommitsForPaths(repoDir, ref.sha, root, options),
         ref.isDefault || defaultRefInfo === undefined
           ? Promise.resolve(undefined)
           : changedSinceMergeBase(repoDir, defaultRefInfo.sha, ref.sha, root, options),
       ]);
-      return { ref, files, touches, changed };
+      return { ref, files: tree.files, reports: tree.reports, touches, changed };
     }),
   );
   // Paths each branch edited itself; a copy that is merely older than main does not count.
@@ -263,6 +266,11 @@ export async function buildSnapshot(
     isReady: isReady(graph, candidate.frontmatter.id),
     blockedBy: blockedBy(graph, candidate.frontmatter.id),
     onBranches: onBranchesFor(candidate.path, refs, blobsByRef, changedByRef),
+    reports: groupReports(
+      listed.find((entry) => entry.ref.name === candidate.ref.name)?.reports.get(
+        candidate.path.slice(0, candidate.path.lastIndexOf("/")),
+      ) ?? [],
+    ),
   }));
 
   legacy.sort((left, right) => left.path.localeCompare(right.path));

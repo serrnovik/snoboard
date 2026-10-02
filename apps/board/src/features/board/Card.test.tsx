@@ -114,3 +114,22 @@ describe("pending badge", () => {
     expect(screen.getByTestId("pending-value").textContent).toBe("in-progress → review");
   });
 });
+
+describe("report count", () => {
+  it("shows how many reports the initiative has, from the board payload", () => {
+    const withReports = {
+      ...item(),
+      reports: [
+        { name: "final.report", formats: ["md" as const, "html" as const] },
+        { name: "phase-1.report", formats: ["md" as const], phase: 1 },
+      ],
+    };
+    render(<BoardCard item={withReports} doneStatuses={["done"]} defaultBranch="main" />);
+    expect(screen.getByTestId("report-count").textContent).toBe("2 reports");
+  });
+
+  it("stays hidden without reports", () => {
+    render(<BoardCard item={item()} doneStatuses={["done"]} defaultBranch="main" />);
+    expect(screen.queryByTestId("report-count")).toBeNull();
+  });
+});

@@ -44,6 +44,7 @@ import { boardIssueLinks, fetchInitiativeIssues, issueLinkConfig } from "./issue
 import { botTokenFileFor, editSettingsFor, findActiveRepo, listActiveRepos } from "./repos-config.js";
 import { DEFAULT_REPO_ID, getConfig, getSnapshot, getStatus } from "./store.js";
 import { initiativeHistory, snapshotPeople } from "./history.js";
+import { lookupReport, reportNotFound, reportResponse } from "./reports.js";
 
 const REFRESH_WINDOW_MS = 30_000;
 const REPO_ID = /^[a-z0-9-]{1,32}$/;
@@ -289,6 +290,30 @@ async function initiativeAssetResponse(c: Context<BoardEnv>, repoId: string): Pr
       "Cache-Control": "private, no-store",
     },
   });
+}
+
+api.get("/repos/:repo/initiatives/:id/reports/:file", (c) =>
+  initiativeReportResponse(c, c.req.param("repo"), c.req.param("file")),
+);
+api.get("/repos/:repo/initiatives/:id/reports/:dir/:file", (c) =>
+  initiativeReportResponse(c, c.req.param("repo"), `${c.req.param("dir")}/${c.req.param("file")}`),
+);
+
+/**
+ * A report under `<initiative folder>/reports/`, read from the clone at the source ref tip.
+ * Only files the snapshot listed (regular `.md` / `.html` blobs) are answered; see `reports.ts`.
+ */
+async function initiativeReportResponse(c: Context<BoardEnv>, repoId: string, relative: string): Promise<Response> {
+  if (!isKnownRepo(repoId)) return reportNotFound();
+  const snapshot = getSnapshot(repoId);
+  if (snapshot === null) return reportNotFound();
+  const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
+  if (item === undefined) return reportNotFound();
+  const found = lookupReport(snapshot, item, relative);
+  if (!found.ok) return reportNotFound();
+  const repoDir = initiativeRepoDir(repoId);
+  if (repoDir === undefined) return reportNotFound();
+  return reportResponse(repoDir, found);
 }
 
 api.get("/repos/:repo/initiatives/:id/history", async (c) => {

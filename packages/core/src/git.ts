@@ -267,13 +267,34 @@ export async function listInitiativeFiles(
   config: GitConfig,
   options?: GitCallOptions,
 ): Promise<InitiativeFile[]> {
+  return (await listInitiativeTree(repoDir, ref, config, options)).files;
+}
+
+export interface InitiativeTree {
+  files: InitiativeFile[];
+  /** Initiative folder -> report paths relative to its `reports/` folder (regular files only, sorted). */
+  reports: Map<string, string[]>;
+}
+
+/**
+ * One `ls-tree` walk (trees only, no blobs) that finds initiative files and the
+ * report files next to them: `<root>/<project>/<slug>/reports/<name>` or one folder deeper.
+ */
+export async function listInitiativeTree(
+  repoDir: string,
+  ref: string,
+  config: GitConfig,
+  options?: GitCallOptions,
+): Promise<InitiativeTree> {
   const root = config.root.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  const rootDepth = root.length === 0 ? 0 : root.split("/").length;
   const args = ["ls-tree", "-r", "-z", ref];
   if (root.length > 0) {
     args.push("--", root);
   }
   const result = await git(repoDir, args, options);
   const files: InitiativeFile[] = [];
+  const reports = new Map<string, string[]>();
   for (const record of result.stdout.toString("utf8").split("\0")) {
     if (record.length === 0) {
       continue;
@@ -284,14 +305,38 @@ export async function listInitiativeFiles(
     }
     const meta = record.slice(0, tab).replace(/\r$/, "");
     const filePath = record.slice(tab + 1).replace(/\\/g, "/");
-    const blobSha = meta.split(" ")[2];
-    if (blobSha === undefined || !isInitiativePath(filePath, root, config.file)) {
+    const [mode, type, blobSha] = meta.split(" ");
+    if (blobSha === undefined) {
       continue;
     }
-    files.push({ path: filePath, blobSha });
+    if (isInitiativePath(filePath, root, config.file)) {
+      files.push({ path: filePath, blobSha });
+      continue;
+    }
+    // Reports: regular blobs only (symlinks are 120000, submodules are commits).
+    if (type !== "blob" || (mode !== "100644" && mode !== "100755")) continue;
+    const parts = filePath.split("/");
+    if (parts[rootDepth + 2] !== "reports") continue;
+    if (parts.length !== rootDepth + 4 && parts.length !== rootDepth + 5) continue;
+    if (!isReportFile(parts.slice(rootDepth + 3).join("/"))) continue;
+    const folder = parts.slice(0, rootDepth + 2).join("/");
+    const list = reports.get(folder) ?? [];
+    list.push(parts.slice(rootDepth + 3).join("/"));
+    reports.set(folder, list);
   }
   files.sort((left, right) => compareName(left.path, right.path));
-  return files;
+  for (const list of reports.values()) list.sort(compareName);
+  return { files, reports };
+}
+
+const REPORT_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
+
+/** `name.md` / `name.html`, or one sub-folder deep; plain ASCII names only, no dot segments. */
+export function isReportFile(relative: string): boolean {
+  const parts = relative.split("/");
+  if (parts.length < 1 || parts.length > 2) return false;
+  if (!parts.every((part) => REPORT_SEGMENT.test(part) && !part.includes(".."))) return false;
+  return /\.(md|html)$/.test(parts[parts.length - 1] ?? "");
 }
 
 function parseCatFileBatch(buffer: Buffer): Map<string, string> {

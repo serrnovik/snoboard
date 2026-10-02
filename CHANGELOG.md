@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Show initiative and phase reports from `<initiative folder>/reports/` (`.md` and `.html`, `.md`/`.html` twins grouped,
+  `phase-<n>` names attached to their phase). The snapshot lists them from the git tree; cards show "N reports", the
+  details panel has a **Reports** section and phase chips, and a large viewer renders markdown (sanitized, relative
+  images through authenticated endpoints) and HTML twins in a script-less sandboxed frame. New endpoint
+  `GET /api/repos/<repo>/initiatives/<id>/reports/<file>`.
+
 - Edit issue refs (`setIssues`) and external links (`setLinks`, new optional `links` field) from the details panel.
 - Attach PNG, JPEG, WebP and GIF images in the markdown editors (paste, drop or "Attach image"). Images are committed
   under `<initiative folder>/assets/` in the same commit as the text, and served to signed-in users from

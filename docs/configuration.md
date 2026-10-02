@@ -152,3 +152,71 @@ Unknown keys, duplicate ids, a missing key file, or credentials inside a URL sto
 2. Use `id: default` to keep existing browser baskets and remembered submit modes (`snoboard:basket:v1:default`,
    `snoboard:submit-mode:v1:default`). Another id starts with an empty basket.
 3. Set `SNOBOARD_REPOS_FILE`, then remove the single-repo variables.
+
+## Reports
+
+An initiative can keep reports next to its file: phase summaries, review plans, test plans, a final report. Snoboard
+lists them on the board and opens them in a viewer. There is nothing to configure.
+
+```text
+initiatives/acme/002-billing/
+  initiative.md
+  assets/chart.png
+  reports/
+    final.report.md
+    final.report.html        # optional self-contained HTML twin of the .md
+    phase-1.report.md
+    phase-2.review-plan.md
+    pr63-review-test-plan.md
+    shots/invoice.png        # an image a report links to
+```
+
+- Only `.md` and `.html` files count, directly in `reports/` or one folder deeper (`reports/merge-review/plan.md`).
+  Names use letters, digits, `.`, `_` and `-`, and do not start with a dot. Symlinks are ignored.
+- A `.md` and an `.html` file with the same name are one report with two formats.
+- A report whose name (or folder) starts with `phase-<n>` belongs to phase `n` (`phase-2.report.md`,
+  `phase-2.review-plan.md`, `phase-0-baseline/audit.md`). When the initiative has no such phase, the report is listed
+  with the initiative's own reports.
+- At most 200 reports per initiative are listed.
+
+The list is part of the snapshot and comes from the git tree only: a blob-less clone downloads a report only when
+someone opens it. The board payload carries the list, so the card shows "N reports" without another request.
+
+### On the board
+
+- **Card:** a small "N reports" mark.
+- **Details panel:** a **Reports** section with the initiative's reports, and chips on each phase row for that
+  phase's reports (`report`, `review-plan`, ...).
+- **Viewer:** a near full-screen dialog. Previous and next (buttons or the arrow keys) walk all reports of the
+  initiative; **MD / HTML** switches when both exist; **Open raw on GitHub** links to the file on the forge, only when
+  the configured file URL is `https:`. Esc closes it.
+
+Markdown reports are rendered by the board with the same sanitized renderer as the editor preview (tables, task
+lists). Raw HTML inside the markdown is not rendered.
+
+- Images with a relative path inside the initiative folder are shown: `../assets/<file>` through the image endpoint
+  (see [editing.md](editing.md#images)), and PNG, JPEG, WebP or GIF files below `reports/` (`./shots/invoice.png`)
+  through the report endpoint. Remote, `data:` and other images are never loaded.
+- A relative link to another listed report (`./phase-1.report.md`) opens it in the viewer. A relative link to another
+  file in the initiative folder opens that file on the forge. `https:` and `mailto:` links open in a new tab. Other
+  links show as plain text.
+
+HTML twins render statically in a sandboxed frame: no scripts, no forms, no pop-ups, no access to the board, and no
+network requests (styles must be inline, images `data:` URIs). Interactive HTML reports (charts drawn by JavaScript,
+tabs, filters) therefore show only their static content; read the markdown twin or open the raw file instead. There
+is no switch to allow scripts.
+
+### Report endpoint
+
+`GET /api/repos/<repo>/initiatives/<id>/reports/<file>` (and `.../reports/<folder>/<file>`) answers one file, read
+from the clone at the tip of the initiative's source branch. The blob is fetched on demand.
+
+| Request | Answer |
+| --- | --- |
+| A listed `.md` report | `text/plain; charset=utf-8` |
+| A listed `.html` report | `text/html; charset=utf-8` with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'self'` |
+| A PNG, JPEG, WebP or GIF below `reports/` | Its image type, by magic bytes (SVG refused), at most 5 MB |
+| Anything else, a report over 2 MB, a symlink, a path outside `reports/` | `404` |
+
+It uses the board's sign-in. Every answer has `X-Content-Type-Options: nosniff` and `Cache-Control: private,
+no-store`. The threat model is in [SECURITY.md](../SECURITY.md#report-rendering).
