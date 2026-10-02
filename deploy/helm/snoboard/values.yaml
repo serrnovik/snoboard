@@ -39,6 +39,9 @@ env:
   SNOBOARD_ALLOWED_GITHUB_LOGINS: ""
   # Comma-separated GitHub organizations. Membership requires the read:org scope.
   SNOBOARD_ALLOWED_GITHUB_ORGS: ""
+  # cloudflare-access only: "true" uses the GitHub OAuth client (id above, secret file below) solely so
+  # people connect their own GitHub write token when they submit edits. Needs SNOBOARD_PUBLIC_URL.
+  SNOBOARD_GITHUB_WRITE_CONNECT: "false"
 
 # Name of a Secret to mount as files. Leave empty to skip the mount.
 # The Secret must contain every key listed in secretFiles.

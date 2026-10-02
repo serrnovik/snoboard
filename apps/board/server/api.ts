@@ -9,6 +9,7 @@ import {
   MAX_SUBMIT_BODY_BYTES,
   type Config,
 } from "snoboard";
+import { getAuthConfig } from "./auth/env.js";
 import { authMiddleware, type BoardEnv } from "./auth/middleware.js";
 import {
   MAX_VALIDATE_BODY_BYTES,
@@ -127,8 +128,11 @@ function editConfigJson(c: Context<BoardEnv>, repoId: string) {
   const settings = settingsFor(repoId);
   const board = getConfig(repoId);
   const baseBranch = settings.baseBranch ?? board?.defaultBranch ?? "main";
-  const access = editPermissions(settings, editActor(c));
+  const actor = editActor(c);
+  const writeConnect = githubWriteConnect();
+  const access = editPermissions(settings, actor, { githubWriteConnect: writeConnect });
   const subject = submitSubject(c);
+  const connected = access.canSubmit && (actor === "github" || (actor === "cloudflare-access" && writeConnect)) ? getWriteToken(c) : null;
   return c.json({
     enabled: settings.enabled,
     modes: settings.modes,
@@ -136,7 +140,11 @@ function editConfigJson(c: Context<BoardEnv>, repoId: string) {
     ...(settings.directBranch === undefined ? {} : { directBranch: settings.directBranch }),
     canSubmit: access.canSubmit,
     // A GitHub user who already granted write access must see Submit, not Connect again.
-    needsGithubWrite: access.needsGithubWrite && getWriteToken(c) === null,
+    needsGithubWrite: access.needsGithubWrite && connected === null,
+    // Access boards with write-connect: the UI offers "Connect GitHub" (commit as yourself)
+    // and shows who is connected. Only the login, never the token.
+    ...(actor === "cloudflare-access" && writeConnect && access.canSubmit ? { githubWriteConnect: true } : {}),
+    ...(connected !== null ? { githubLogin: connected.login } : {}),
     defaultMode: defaultEditMode(settings),
     // owner/name for building https://github.com links in the UI.
     ...(board !== null && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(board.forge.repo) && board.forge.repo !== "owner/name"
@@ -147,6 +155,12 @@ function editConfigJson(c: Context<BoardEnv>, repoId: string) {
     // Echoed back by POST /api/edits/submit. Bound to this session or Access identity.
     ...(access.canSubmit && subject !== null ? { csrf: issueCsrfToken(subject) } : {}),
   });
+}
+
+/** Access board whose GitHub OAuth client may connect write tokens (SNOBOARD_GITHUB_WRITE_CONNECT). */
+function githubWriteConnect(): boolean {
+  const config = getAuthConfig();
+  return config.githubWriteConnect === true && config.modes.includes("cloudflare-access") && config.github !== undefined;
 }
 
 function editActor(c: Context<BoardEnv>): EditActor {
@@ -440,7 +454,8 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   if (bodyNamesAnotherRepo) {
     return deny(400, { code: "repo_mismatch", error: "these edits belong to another repository" }, extra);
   }
-  const access = editPermissions(settings, actor);
+  const writeConnect = actor === "cloudflare-access" && githubWriteConnect();
+  const access = editPermissions(settings, actor, { githubWriteConnect: writeConnect });
   if (!access.canSubmit) {
     return deny(403, { code: "read_only", error: "this sign-in can view the board but not submit edits" }, extra);
   }
@@ -452,13 +467,14 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   }
   const credential = chooseSubmitCredential({
     actor,
-    writeToken: actor === "github" ? getWriteToken(c) : null,
+    writeToken: actor === "github" || writeConnect ? getWriteToken(c) : null,
     botToken:
       actor === "password" || actor === "cloudflare-access"
         ? readBotTokenFile(botTokenFileFor(repoId))
         : undefined,
     accessEmail: c.get("identity")?.email,
     passwordName: process.env.SNOBOARD_PASSWORD_NAME,
+    githubWriteConnect: writeConnect,
   });
   if (!credential.ok) {
     if (credential.code === "needs_github_write") {
@@ -466,6 +482,8 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
     }
     return deny(403, { code: credential.code, error: credential.error }, extra);
   }
+  const github = credential.githubLogin;
+  const logged = github === undefined ? extra : { ...extra, github };
   const snapshot = getSnapshot(repoId);
   const config = getConfig(repoId);
   if (snapshot === null || config === null) {
@@ -503,14 +521,14 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
     unlockSubmit(limitKey);
   }
   if (outcome.ok) {
-    logSubmit({ outcome: "ok", reason: "ok", user: who, actor, repo: repoId, ...extra });
+    logSubmit({ outcome: "ok", reason: "ok", user: who, actor, repo: repoId, ...logged });
     void requestRefresh(repoId);
     const commitUrl = githubCommitUrl(config.forge.repo, outcome.commit);
     return c.json(commitUrl === undefined ? outcome : { ...outcome, commitUrl }, 200);
   }
-  logSubmit({ outcome: "failed", reason: outcome.code, user: who, actor, repo: repoId, ...extra });
+  logSubmit({ outcome: "failed", reason: outcome.code, user: who, actor, repo: repoId, ...logged });
   if (outcome.code === "github_auth") {
-    if (actor === "github") {
+    if (actor === "github" || github !== undefined) {
       clearWriteToken(c);
       return c.json({ ...outcome, needsGithubWrite: true }, 401);
     }

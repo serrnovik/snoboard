@@ -136,6 +136,27 @@ describe("prepareEdits", () => {
     expect(prepared.files[0]?.text).toContain("title: Beta two");
   });
 
+  it("rejects done while a phase is open, and accepts it once the phase edit comes first", async () => {
+    const withPhase = initiative("acme-001", "Alpha", "in-progress").replace(
+      "updated: 2026-09-01\n",
+      "updated: 2026-09-01\nphases:\n  - id: 3\n    title: Rollout\n    status: in-progress\n",
+    );
+    const read = blobs({ [alpha]: withPhase });
+    const done = { kind: "setStatus" as const, id: "acme-001", from: "in-progress", to: "done" };
+    const alone = await prepareEdits([done], snapshotOf(items), read, config, TODAY);
+    expect(alone.results[0]?.ok).toBe(false);
+    expect(alone.results[0]?.error).toBe('acme-001: phases: phase 3 has status "in-progress" while the initiative is done');
+
+    const fixed = await prepareEdits(
+      [{ kind: "setPhaseStatus", id: "acme-001", phase: 3, from: "in-progress", to: "done" }, done],
+      snapshotOf(items),
+      read,
+      config,
+      TODAY,
+    );
+    expect(fixed.results.map((result) => result.ok)).toEqual([true, true]);
+  });
+
   it("applies two edits on one file in order", async () => {
     const prepared = await prepareEdits(
       [

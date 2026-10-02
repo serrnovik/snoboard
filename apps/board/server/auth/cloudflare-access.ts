@@ -34,7 +34,12 @@ export type AccessJwtCode =
   | "not-allowed"
   | "certs";
 
-export type AccessJwtResult = { ok: true; identity: AccessIdentity } | { ok: false; code: AccessJwtCode };
+/** `iat`/`exp` of the Access token (seconds), so a write token can be tied to this Access login. */
+export type AccessTokenTimes = { iat?: number; exp: number };
+
+export type AccessJwtResult =
+  | { ok: true; identity: AccessIdentity; token: AccessTokenTimes }
+  | { ok: false; code: AccessJwtCode };
 
 type CertCache = {
   keys: ReadonlyMap<string, KeyObject>;
@@ -264,7 +269,9 @@ function claimsResult(payload: Record<string, unknown>, config: CloudflareAccess
     return failure("not-allowed");
   }
   const identity: AccessIdentity = groups.length === 0 ? { email, sub: payload.sub } : { email, sub: payload.sub, groups };
-  return { ok: true, identity };
+  const exp = payload.exp as number;
+  const iat = typeof payload.iat === "number" && Number.isSafeInteger(payload.iat) ? payload.iat : undefined;
+  return { ok: true, identity, token: iat === undefined ? { exp } : { iat, exp } };
 }
 
 function audienceAllowed(aud: unknown, allowed: readonly string[]): boolean {

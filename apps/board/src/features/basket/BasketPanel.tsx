@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { EditLabel } from "@/features/basket/EditLabel";
 import { SubmitDialog } from "@/features/basket/SubmitDialog";
-import { describeEdit, useBasket } from "@/features/basket/store";
+import { DEFAULT_REPO_ID, describeEdit, useBasket } from "@/features/basket/store";
+import { useValidationErrors } from "@/features/basket/validation";
+import { CircleAlert } from "lucide-react";
 
 export function BasketPanel({
   enabled,
@@ -15,6 +17,7 @@ export function BasketPanel({
   titles?: ReadonlyMap<string, string>;
 }) {
   const basket = useBasket(repoId);
+  const errors = useValidationErrors(repoId ?? DEFAULT_REPO_ID, basket.edits);
   if (!enabled) return null;
 
   return (
@@ -28,6 +31,11 @@ export function BasketPanel({
         <span data-testid="basket-count" className="text-xs text-muted-foreground">
           {basket.edits.length}
         </span>
+        {errors.size > 0 ? (
+          <span data-testid="basket-invalid-count" className="ml-auto text-xs font-medium text-destructive">
+            {errors.size === 1 ? "1 needs attention" : `${errors.size} need attention`}
+          </span>
+        ) : null}
       </header>
       {basket.edits.length === 0 ? (
         <p className="text-sm text-muted-foreground">No pending edits.</p>
@@ -35,8 +43,24 @@ export function BasketPanel({
         <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
           {basket.edits.map((edit, index) => {
             const label = describeEdit(edit, titles);
+            const error = errors.get(index);
             return (
-              <li key={`${label}:${index}`} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+              <li
+                key={`${label}:${index}`}
+                data-invalid={error === undefined ? undefined : "true"}
+                className="flex min-w-0 items-center justify-between gap-2 text-sm"
+              >
+                {error !== undefined ? (
+                  <span
+                    data-testid="basket-invalid"
+                    role="img"
+                    aria-label={`Needs attention: ${error}`}
+                    title={error}
+                    className="shrink-0 text-destructive"
+                  >
+                    <CircleAlert aria-hidden className="size-4" />
+                  </span>
+                ) : null}
                 <EditLabel edit={edit} titles={titles} className="min-w-0 flex-1" />
                 <Button
                   type="button"

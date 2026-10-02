@@ -44,9 +44,15 @@ function initiative(folder, fields, summary) {
     for (const phase of fields.phases) {
       lines.push(`  - id: ${phase.id}`, `    title: ${phase.title}`, `    status: ${phase.status}`);
       if (phase.pr) lines.push(`    pr: ${phase.pr}`);
+      if (phase.depends) lines.push(`    depends_on: [${phase.depends.join(", ")}]`);
     }
   }
+  if (fields.links) {
+    lines.push("links:");
+    for (const link of fields.links) lines.push(`  - title: ${link.title}`, `    url: ${link.url}`);
+  }
   lines.push("---", "", `# ${fields.title}`, "", "## Summary", "", summary, "");
+  if (fields.body) lines.push(fields.body.trim(), "");
   writeFileSync(path.join(dir, "initiative.md"), lines.join("\n"));
 }
 
@@ -68,11 +74,27 @@ initiative("acme/001-onboarding", {
 initiative("acme/002-billing", {
   id: "acme-002", title: "Usage-based billing", status: "in-progress", priority: "p0",
   depends: ["acme-001"], updated: "2026-09-27", labels: ["billing"],
+  issues: ["gh#18", "gh#23"],
+  links: [
+    { title: "Pricing design doc", url: "https://example.com/docs/pricing" },
+    { title: "Billing dashboard", url: "https://example.com/dashboards/billing" },
+  ],
   phases: [
     { id: 1, title: "Metering", status: "done", pr: 21 },
-    { id: 2, title: "Invoices", status: "in-progress" },
-    { id: 3, title: "Dunning", status: "planned" },
+    { id: 2, title: "Invoices", status: "in-progress", depends: [1] },
+    { id: 3, title: "Dunning", status: "planned", depends: [2] },
   ],
+  body: `
+## Goals
+
+- Meter active seats per day.
+- Monthly invoices with line items, downloadable as PDF.
+- Retry failed payments and notify the account owner.
+
+## Out of scope
+
+Annual plans and coupons.
+`,
 }, "Customers are charged per active seat, with invoices in the account area.");
 initiative("acme/003-reports", {
   id: "acme-003", title: "Monthly usage reports", status: "planned", priority: "p2",
@@ -82,14 +104,20 @@ initiative("acme/003-reports", {
 initiative("acme/004-search", {
   id: "acme-004", title: "Global search", status: "idea", priority: "p3",
   updated: "2026-09-15", labels: ["web"],
+  links: [{ title: "Search prototype notes", url: "https://example.com/notes/search" }],
 }, "One search box across projects, people and documents.");
 initiative("platform/001-ci", {
   id: "platform-001", title: "Faster CI pipelines", status: "review", priority: "p1",
-  updated: "2026-09-28", labels: ["infra"],
+  updated: "2026-09-28", labels: ["infra"], issues: ["gh#31"],
+  phases: [
+    { id: 1, title: "Cache dependencies", status: "done", pr: 30 },
+    { id: 2, title: "Split test shards", status: "review", pr: 33 },
+  ],
 }, "Pull request checks finish in under five minutes.");
 initiative("platform/002-observability", {
   id: "platform-002", title: "Service observability", status: "planned", priority: "p1",
-  depends: ["platform-001"], updated: "2026-09-22", labels: ["infra"],
+  depends: ["platform-001"], updated: "2026-09-22", labels: ["infra", "security"],
+  links: [{ title: "Tracing RFC", url: "https://example.com/rfc/tracing" }],
 }, "Every service ships traces and a health dashboard.");
 initiative("platform/003-sso", {
   id: "platform-003", title: "Single sign-on", status: "parked", priority: "p2",

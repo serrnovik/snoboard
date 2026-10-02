@@ -93,6 +93,8 @@ export function logSubmit(input: {
   reason: string;
   user: string;
   actor: string;
+  /** GitHub login whose token wrote the commit (Access users with a connected token). */
+  github?: string;
   repo?: string;
   mode?: string;
   edits?: number;
@@ -105,6 +107,7 @@ export function logSubmit(input: {
     `user=${JSON.stringify(input.user.slice(0, 200))}`,
     `actor=${input.actor}`,
   ];
+  if (input.github !== undefined) parts.push(`github=${JSON.stringify(input.github.slice(0, 40))}`);
   if (input.repo !== undefined) parts.push(`repo=${JSON.stringify(input.repo.slice(0, 40))}`);
   if (input.mode !== undefined) parts.push(`mode=${JSON.stringify(input.mode.slice(0, 20))}`);
   if (input.edits !== undefined) parts.push(`edits=${input.edits}`);
@@ -500,7 +503,8 @@ async function openEditPullRequest(
 export const PASSWORD_BOT_IDENTITY = "password-user";
 
 export type SubmitCredential =
-  | { ok: true; token: string; user: string }
+  /** `githubLogin` is set when an Access user submits with their own connected GitHub token. */
+  | { ok: true; token: string; user: string; githubLogin?: string }
   | { ok: false; code: "read_only"; error: string }
   | { ok: false; code: "needs_github_write"; error: string };
 
@@ -508,7 +512,9 @@ const READ_ONLY_ERROR = "this sign-in can view the board but not submit edits";
 
 /**
  * GitHub users always submit with their own write token. Password and Access
- * users submit with the bot token when it is configured; everyone else is read-only.
+ * users submit with the bot token when it is configured. Access users who connected
+ * GitHub (write-connect) submit with their own token, preferred over the bot; the
+ * trailer then reads `<githubLogin> (<access email>)`. Everyone else is read-only.
  * The returned `user` is the commit trailer identity (`name (via bot)` for the bot).
  */
 export function chooseSubmitCredential(input: {
@@ -517,6 +523,8 @@ export function chooseSubmitCredential(input: {
   botToken?: string;
   accessEmail?: string;
   passwordName?: string;
+  /** Access board with SNOBOARD_GITHUB_WRITE_CONNECT: a missing token means "connect", not read-only. */
+  githubWriteConnect?: boolean;
 }): SubmitCredential {
   if (input.actor === "github") {
     if (input.writeToken === null || input.writeToken.token.length === 0) {
@@ -529,12 +537,33 @@ export function chooseSubmitCredential(input: {
   if (input.actor !== "password" && input.actor !== "cloudflare-access") {
     return { ok: false, code: "read_only", error: READ_ONLY_ERROR };
   }
+  if (input.actor === "cloudflare-access" && input.githubWriteConnect === true) {
+    const own = accessUserCredential(input.writeToken, input.accessEmail);
+    if (own !== null) return own;
+  }
   const botToken = input.botToken?.trim() ?? "";
-  if (botToken.length === 0) return { ok: false, code: "read_only", error: READ_ONLY_ERROR };
+  if (botToken.length === 0) {
+    if (input.actor === "cloudflare-access" && input.githubWriteConnect === true) {
+      return { ok: false, code: "needs_github_write", error: "connect GitHub write access first" };
+    }
+    return { ok: false, code: "read_only", error: READ_ONLY_ERROR };
+  }
   const identity =
     input.actor === "password" ? passwordIdentity(input.passwordName) : commitIdentity(input.accessEmail);
   if (identity === undefined) return { ok: false, code: "read_only", error: READ_ONLY_ERROR };
   return { ok: true, token: botToken, user: `${identity} (via bot)` };
+}
+
+/** The Access user's own token, only when it was connected under this same Access email. */
+function accessUserCredential(
+  writeToken: { token: string; login: string; accessEmail?: string } | null,
+  accessEmail: string | undefined,
+): SubmitCredential | null {
+  if (writeToken === null || writeToken.token.length === 0 || writeToken.accessEmail === undefined) return null;
+  const email = commitIdentity(accessEmail)?.toLowerCase();
+  const login = commitIdentity(writeToken.login);
+  if (email === undefined || login === undefined || writeToken.accessEmail.toLowerCase() !== email) return null;
+  return { ok: true, token: writeToken.token, user: `${login} (${email})`, githubLogin: login };
 }
 
 /** Password commits say `password-user` unless a display name is configured. */

@@ -305,4 +305,43 @@ describe("cloudflare access environment", () => {
     setAuthConfig(config);
     expect(getPublicAuthView()).toEqual({ password: false, github: false, cloudflareAccess: true });
   });
+  it("loads the GitHub OAuth client for write-connect only when SNOBOARD_GITHUB_WRITE_CONNECT is on", async () => {
+    const dir = await makeDir();
+    const clientSecretFile = path.join(dir, "client-secret");
+    await writeFile(clientSecretFile, "synthetic-client-secret\n");
+    const base = {
+      SNOBOARD_AUTH_MODES: "cloudflare-access",
+      SNOBOARD_CF_ACCESS_TEAM_DOMAIN: "example.cloudflareaccess.com",
+      SNOBOARD_CF_ACCESS_AUD: "audience-tag",
+      SNOBOARD_ALLOWED_EMAIL_DOMAINS: "example.com",
+      SNOBOARD_GITHUB_CLIENT_ID: "client-id",
+      SNOBOARD_GITHUB_CLIENT_SECRET_FILE: clientSecretFile,
+      SNOBOARD_PUBLIC_URL: "https://board.example/",
+    };
+    // The client alone does nothing: the switch is explicit.
+    expect(loadAuthConfig(base).github).toBeUndefined();
+    expect(loadAuthConfig(base).githubWriteConnect).toBeUndefined();
+
+    const on = loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "true", SNOBOARD_GITHUB_WRITE_SCOPE: "public_repo" });
+    expect(on.githubWriteConnect).toBe(true);
+    expect(on.publicUrl).toBe("https://board.example");
+    expect(on.sessionSecret?.length).toBe(32);
+    expect(on.github).toMatchObject({ clientId: "client-id", allowedLogins: [], allowedOrgs: [], writeScope: "public_repo" });
+    setAuthConfig(on);
+    expect(getPublicAuthView()).toEqual({ password: false, github: false, cloudflareAccess: true });
+
+    const narrowed = loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "1", SNOBOARD_ALLOWED_GITHUB_LOGINS: "OctoCat" });
+    expect(narrowed.github?.allowedLogins).toEqual(["octocat"]);
+
+    expect(() => loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "true", SNOBOARD_PUBLIC_URL: "" })).toThrow(
+      /SNOBOARD_PUBLIC_URL is required/,
+    );
+    expect(() =>
+      loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "true", SNOBOARD_GITHUB_CLIENT_SECRET_FILE: "" }),
+    ).toThrow(/SNOBOARD_GITHUB_CLIENT_SECRET_FILE is required/);
+    expect(() =>
+      loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "true", SNOBOARD_ALLOWED_GITHUB_ORGS: "acme" }),
+    ).toThrow(/SNOBOARD_ALLOWED_GITHUB_ORGS is not supported/);
+    expect(() => loadAuthConfig({ ...base, SNOBOARD_GITHUB_WRITE_CONNECT: "yes" })).toThrow(/true or false/);
+  });
 });

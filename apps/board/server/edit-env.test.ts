@@ -118,6 +118,16 @@ describe("edit environment", () => {
     expect(editPermissions(on, "github")).toEqual({ canSubmit: true, needsGithubWrite: true });
     expect(editPermissions(bot, "password")).toEqual({ canSubmit: true, needsGithubWrite: false });
     expect(editPermissions(bot, "cloudflare-access")).toEqual({ canSubmit: true, needsGithubWrite: false });
+    // Access + write-connect: connect when there is no bot, bot or own token otherwise.
+    expect(editPermissions(on, "cloudflare-access", { githubWriteConnect: true })).toEqual({
+      canSubmit: true,
+      needsGithubWrite: true,
+    });
+    expect(editPermissions(bot, "cloudflare-access", { githubWriteConnect: true })).toEqual({
+      canSubmit: true,
+      needsGithubWrite: false,
+    });
+    expect(editPermissions(on, "password", { githubWriteConnect: true })).toEqual({ canSubmit: false, needsGithubWrite: false });
     expect(editPermissions(bot, "github")).toEqual({ canSubmit: true, needsGithubWrite: true });
   });
 });

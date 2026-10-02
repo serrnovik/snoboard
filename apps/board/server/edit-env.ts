@@ -79,9 +79,22 @@ export function loadEditConfig(env: NodeJS.ProcessEnv): EditSettings {
   };
 }
 
-export function editPermissions(settings: EditSettings, actor: EditActor): EditPermissions {
+/**
+ * `githubWriteConnect`: an Access board whose GitHub OAuth client may connect a
+ * write token at submit time. `needsGithubWrite` here means "a GitHub write token
+ * is the only way to submit"; the API clears it once the session holds a token.
+ * With a bot token too, Access users may submit via the bot or connect to commit as themselves.
+ */
+export function editPermissions(
+  settings: EditSettings,
+  actor: EditActor,
+  options: { githubWriteConnect?: boolean } = {},
+): EditPermissions {
   if (!settings.enabled) return { canSubmit: false, needsGithubWrite: false };
   if (actor === "github") return { canSubmit: true, needsGithubWrite: true };
+  if (actor === "cloudflare-access" && options.githubWriteConnect === true) {
+    return { canSubmit: true, needsGithubWrite: !settings.botTokenConfigured };
+  }
   if ((actor === "password" || actor === "cloudflare-access") && settings.botTokenConfigured) {
     return { canSubmit: true, needsGithubWrite: false };
   }

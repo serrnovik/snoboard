@@ -11,6 +11,10 @@ import {
 export type CloudflareAccessIdentity = {
   kind: "cloudflare-access";
   email: string;
+  /** Access subject and token times; together they identify one Access login (see write-tokens.ts). */
+  sub?: string;
+  iat?: number;
+  exp?: number;
 };
 
 export type BoardEnv = {
@@ -110,7 +114,7 @@ export function isApiPath(pathname: string): boolean {
 
 const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
 
-async function readAccessIdentity(c: Context<BoardEnv>, config: AuthConfig): Promise<CloudflareAccessIdentity | null> {
+export async function readAccessIdentity(c: Context, config: AuthConfig): Promise<CloudflareAccessIdentity | null> {
   const access = config.cloudflareAccess;
   if (access === undefined) return null;
   // The JWT header is the only credential. CF_Authorization and
@@ -119,7 +123,13 @@ async function readAccessIdentity(c: Context<BoardEnv>, config: AuthConfig): Pro
   if (token === null) return null;
   const result = await verifyAccessJwt(token, access, Date.now());
   if (!result.ok) return null;
-  return { kind: "cloudflare-access", email: result.identity.email };
+  return {
+    kind: "cloudflare-access",
+    email: result.identity.email,
+    sub: result.identity.sub,
+    ...(result.token.iat === undefined ? {} : { iat: result.token.iat }),
+    exp: result.token.exp,
+  };
 }
 
 function readJwtAssertion(value: string | undefined): string | null {

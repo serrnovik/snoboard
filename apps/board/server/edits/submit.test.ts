@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createSign, generateKeyPairSync, randomBytes, type JsonWebKey, type KeyObject } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { bodyHash, buildSnapshot, loadConfig, type Config, type Snapshot } from 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTmpRepo } from "../../../../packages/core/src/test-utils/tmp-repo.ts";
 import { resetAuthConfig, setAuthConfig } from "../auth/env.js";
+import { OAUTH_COOKIE, openOAuthPending } from "../auth/github.js";
 import { SESSION_COOKIE, signSession, type SessionClaims } from "../auth/session.js";
 import { resetWriteTokens, storeWriteToken, WRITE_COOKIE, writeTokenCount } from "../auth/write-tokens.js";
 import { resetEditConfig, setEditConfig, type EditSettings } from "../edit-env.js";
@@ -997,4 +998,250 @@ class FakeGithub {
 
 function reply(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+}
+
+describe("Cloudflare Access users connect GitHub at submit", () => {
+  const signing = makeAccessKey("key-a");
+  let github: FakeGithub;
+  let githubLogin = "octocat";
+
+  beforeEach(() => {
+    logs.length = 0;
+    for (const level of ["info", "warn", "error", "log"] as const) {
+      vi.spyOn(console, level).mockImplementation((...args) => void logs.push(args.map(String).join(" ")));
+    }
+    useAccess();
+    useEdits({ modes: ["pr", "direct"], directBranch: "main" });
+    seedStore(snapshot, config);
+    setInitiativeRepoDir(repoDir);
+    github = new FakeGithub({ [ALPHA]: alphaText, [BETA]: betaText });
+    githubLogin = "octocat";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.cloudflareaccess.com/cdn-cgi/access/certs") return reply(200, { keys: [signing.jwk] });
+      if (url === "https://github.com/login/oauth/access_token") {
+        return reply(200, { access_token: TOKEN, token_type: "bearer", scope: "repo" });
+      }
+      if (url === "https://api.github.com/user") {
+        const auth = new Headers(init?.headers).get("authorization");
+        return auth === `Bearer ${TOKEN}` ? reply(200, { login: githubLogin }) : reply(401, { message: "Bad credentials" });
+      }
+      return github.fetch(input, init);
+    });
+  });
+
+  afterEach(() => {
+    expect(logs.join("\n")).not.toContain(TOKEN);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetAuthConfig();
+    resetEditConfig();
+    resetStore();
+    resetWriteTokens();
+    resetSubmitState();
+    setInitiativeRepoDir(undefined);
+    delete process.env.SNOBOARD_EDIT_BOT_TOKEN_FILE;
+  });
+
+  it("start, callback, edit-config, then submit with the own token and both names in the trailer", async () => {
+    const ada = accessUser("ada@example.com");
+    const before = await json(await app.request("/api/edit-config", { headers: ada.headers }));
+    expect(before).toMatchObject({ canSubmit: true, needsGithubWrite: true, githubWriteConnect: true });
+    expect(before.githubLogin).toBeUndefined();
+
+    const cookie = await connect(ada);
+    const headers = { ...ada.headers, cookie };
+    const after = await json(await app.request("/api/edit-config", { headers }));
+    expect(after).toMatchObject({ canSubmit: true, needsGithubWrite: false, githubLogin: "octocat" });
+    expect(JSON.stringify(after)).not.toContain(TOKEN);
+
+    const response = await accessSubmit(headers, after.csrf, { edits: [statusEdit()], mode: "direct" });
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(github.commit(body.commit).message).toContain("Snoboard-Edit-By: octocat (ada@example.com)");
+    expect(github.commit(body.commit).message).not.toContain("via bot");
+    expect(github.authorizations.every((presented) => presented === TOKEN)).toBe(true);
+    expect(logs.at(-1)).toBe(
+      'snoboard: submit ok reason="ok" user="ada@example.com" actor=cloudflare-access github="octocat" repo="default" mode="direct" edits=1',
+    );
+  });
+
+  it("prefers the connected token over the bot, and the bot otherwise", async () => {
+    const bot = "bot-synthetic-access-token";
+    process.env.SNOBOARD_EDIT_BOT_TOKEN_FILE = await writeTokenFile(bot);
+    useEdits({ modes: ["pr", "direct"], directBranch: "main", botTokenConfigured: true });
+    github.bearers.add(bot);
+    const ada = accessUser("ada@example.com");
+    const plain = await json(await app.request("/api/edit-config", { headers: ada.headers }));
+    expect(plain).toMatchObject({ canSubmit: true, needsGithubWrite: false, githubWriteConnect: true });
+    const viaBot = await accessSubmit(ada.headers, plain.csrf, { edits: [statusEdit()], mode: "direct" });
+    expect(viaBot.status).toBe(200);
+    expect(github.commit((await json(viaBot)).commit).message).toContain("Snoboard-Edit-By: ada@example.com (via bot)");
+
+    const headers = { ...ada.headers, cookie: await connect(ada) };
+    const own = await accessSubmit(headers, plain.csrf, {
+      edits: [{ kind: "setPriority", id: "acme-002", from: "p1", to: "p0" }],
+      mode: "direct",
+    });
+    expect(own.status).toBe(200);
+    expect(github.commit((await json(own)).commit).message).toContain("Snoboard-Edit-By: octocat (ada@example.com)");
+    expect(logs.join("\n")).not.toContain(bot);
+  });
+
+  it("enforces SNOBOARD_ALLOWED_GITHUB_LOGINS when it is set", async () => {
+    useAccess(["hubot"]);
+    const ada = accessUser("ada@example.com");
+    const started = await startConnect(ada);
+    const callback = await app.request(`/auth/github/callback?code=c&state=${started.state}`, {
+      headers: { ...ada.headers, cookie: `${OAUTH_COOKIE}=${started.cookie}` },
+    });
+    expect(callback.status).toBe(403);
+    expect(await callback.text()).toContain("not allowed");
+    expect(writeTokenCount()).toBe(0);
+
+    githubLogin = "hubot";
+    const allowed = await connect(ada);
+    expect(allowed).toContain(WRITE_COOKIE);
+    expect(writeTokenCount()).toBe(1);
+  });
+
+  it("stays read-only without the OAuth client, and offers no write flow", async () => {
+    setAuthConfig({ modes: ["cloudflare-access"], cloudflareAccess: ACCESS });
+    const ada = accessUser("ada@example.com");
+    const plain = await json(await app.request("/api/edit-config", { headers: ada.headers }));
+    expect(plain).toMatchObject({ canSubmit: false, needsGithubWrite: false });
+    expect(plain.githubWriteConnect).toBeUndefined();
+    expect((await app.request("/auth/github/write", { headers: ada.headers })).status).toBe(404);
+    expect((await app.request("/auth/github/callback?code=c&state=x", { headers: ada.headers })).status).toBe(404);
+    // GitHub sign-in itself is never offered on an Access board, even with write-connect on.
+    useAccess();
+    expect((await app.request("/auth/github", { headers: ada.headers })).status).toBe(404);
+  });
+
+  it("keeps tokens apart between Access logins and refuses a callback from another login", async () => {
+    const ada = accessUser("ada@example.com");
+    const cookie = await connect(ada);
+    // Same handle cookie, another person: no token.
+    const bob = accessUser("bob@example.com");
+    const asBob = await json(await app.request("/api/edit-config", { headers: { ...bob.headers, cookie } }));
+    expect(asBob).toMatchObject({ needsGithubWrite: true });
+    expect(asBob.githubLogin).toBeUndefined();
+    // Ada signs out of Access and back in: a new Access token, so the old write token is unreachable.
+    const again = accessUser("ada@example.com", Math.floor(Date.now() / 1000) - 120);
+    const relogged = await json(await app.request("/api/edit-config", { headers: { ...again.headers, cookie } }));
+    expect(relogged).toMatchObject({ needsGithubWrite: true });
+
+    // A flow started by Ada cannot be finished by Bob.
+    const started = await startConnect(ada);
+    const swapped = await app.request(`/auth/github/callback?code=c&state=${started.state}`, {
+      headers: { ...bob.headers, cookie: `${OAUTH_COOKIE}=${started.cookie}` },
+    });
+    expect(swapped.status).toBe(403);
+    // Without an Access token the write flow does not start.
+    expect((await app.request("/auth/github/write")).status).toBe(403);
+  });
+
+  it("drops the token on DELETE /auth/github/write (Access sign-out) and when GitHub rejects it", async () => {
+    const ada = accessUser("ada@example.com");
+    const cookie = await connect(ada);
+    const cleared = await app.request("/auth/github/write", {
+      method: "DELETE",
+      headers: { ...ada.headers, cookie, origin: ORIGIN },
+    });
+    expect(cleared.status).toBe(204);
+    expect(writeTokenCount()).toBe(0);
+    const plain = await json(await app.request("/api/edit-config", { headers: { ...ada.headers, cookie } }));
+    expect(plain).toMatchObject({ needsGithubWrite: true });
+
+    const again = { ...ada.headers, cookie: await connect(ada) };
+    const fresh = await json(await app.request("/api/edit-config", { headers: again }));
+    github.unauthorized = true;
+    const rejected = await accessSubmit(again, fresh.csrf, { edits: [statusEdit()], mode: "direct" });
+    expect(rejected.status).toBe(401);
+    expect(await json(rejected)).toMatchObject({ needsGithubWrite: true });
+    expect(writeTokenCount()).toBe(0);
+  });
+
+  function useAccess(allowedLogins: string[] = []): void {
+    setAuthConfig({
+      modes: ["cloudflare-access"],
+      cloudflareAccess: ACCESS,
+      publicUrl: ORIGIN,
+      sessionSecret: secret,
+      githubWriteConnect: true,
+      github: { clientId: "client-id", clientSecret: "client-secret", allowedLogins, allowedOrgs: [] },
+    });
+  }
+
+  function accessUser(email: string, iat = Math.floor(Date.now() / 1000)): { headers: Record<string, string> } {
+    return { headers: { "cf-access-jwt-assertion": signAccessToken(signing, email, iat) } };
+  }
+
+  async function startConnect(user: { headers: Record<string, string> }): Promise<{ cookie: string; state: string }> {
+    const response = await app.request("/auth/github/write?return=/", { headers: user.headers });
+    expect(response.status).toBe(302);
+    const header = response.headers.getSetCookie().find((value) => value.startsWith(`${OAUTH_COOKIE}=`)) ?? "";
+    const cookie = header.split(";")[0]?.slice(OAUTH_COOKIE.length + 1) ?? "";
+    return { cookie, state: openOAuthPending(secret, cookie, Date.now())?.state ?? "" };
+  }
+
+  /** Runs the whole write-connect flow and returns the handle cookie. */
+  async function connect(user: { headers: Record<string, string> }): Promise<string> {
+    const started = await startConnect(user);
+    const callback = await app.request(`/auth/github/callback?code=c&state=${started.state}`, {
+      headers: { ...user.headers, cookie: `${OAUTH_COOKIE}=${started.cookie}` },
+    });
+    expect(callback.status).toBe(302);
+    const set = callback.headers.getSetCookie();
+    expect(set.join("\n")).not.toContain(TOKEN);
+    expect(set.some((value) => value.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
+    return (set.find((value) => value.startsWith(`${WRITE_COOKIE}=`)) ?? "").split(";")[0] ?? "";
+  }
+
+  function accessSubmit(
+    headers: Record<string, string>,
+    csrf: string,
+    payload: { edits: unknown[]; mode: string },
+  ): Promise<Response> {
+    return app.request("/api/edits/submit", {
+      method: "POST",
+      headers: { ...headers, origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, csrf }),
+    });
+  }
+});
+
+const ACCESS = {
+  teamDomain: "example.cloudflareaccess.com",
+  audiences: ["audience-tag"],
+  allowedEmails: [],
+  allowedEmailDomains: ["example.com"],
+  allowedGroups: [],
+};
+
+function makeAccessKey(kid: string): { kid: string; privateKey: KeyObject; jwk: JsonWebKey & { kid: string } } {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const exported = publicKey.export({ format: "jwk" });
+  return {
+    kid,
+    privateKey,
+    jwk: { kty: "RSA", n: String(exported.n), e: String(exported.e), kid, alg: "RS256", use: "sig" },
+  };
+}
+
+function signAccessToken(pair: { kid: string; privateKey: KeyObject }, email: string, iat: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", kid: pair.kid, typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({
+      aud: ["audience-tag"],
+      iss: "https://example.cloudflareaccess.com",
+      iat,
+      exp: iat + 24 * 3600,
+      nbf: iat - 30,
+      email,
+      sub: `user-${email.replace("@", "-")}`,
+    }),
+  ).toString("base64url");
+  const input = `${header}.${body}`;
+  return `${input}.${createSign("RSA-SHA256").update(input).end().sign(pair.privateKey).toString("base64url")}`;
 }

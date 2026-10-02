@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resetAccessKeyCache, startAccessCertRefresh, stopAccessCertRefresh } from "./cloudflare-access.js";
 
@@ -35,6 +36,12 @@ export type AuthConfig = {
   passwordHash?: string;
   github?: GithubAuthConfig;
   cloudflareAccess?: CloudflareAccessConfig;
+  /**
+   * Cloudflare Access boards only: the GitHub OAuth client is used solely to
+   * connect a write token at submit time (`SNOBOARD_GITHUB_WRITE_CONNECT=true`).
+   * Never a sign-in method.
+   */
+  githubWriteConnect?: boolean;
 };
 
 const MODE_VALUES = new Set<AuthMode>(["password", "github", "none", "cloudflare-access"]);
@@ -94,7 +101,22 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
     return { modes, publicUrl: optionalPublicUrl(env.SNOBOARD_PUBLIC_URL) };
   }
   if (modes.includes("cloudflare-access")) {
-    return { modes, cloudflareAccess: readCloudflareAccess(env) };
+    const cloudflareAccess = readCloudflareAccess(env);
+    if (!flagOn(env.SNOBOARD_GITHUB_WRITE_CONNECT, "SNOBOARD_GITHUB_WRITE_CONNECT")) return { modes, cloudflareAccess };
+    // Write-connect needs a callback URL, a key for the signed OAuth state and the
+    // encrypted token store, and the OAuth client. Without a secret file the key is
+    // random per process (tokens are in memory anyway; a restart means reconnect).
+    const publicUrl = requirePublicUrl(env.SNOBOARD_PUBLIC_URL);
+    const secretFile = env.SNOBOARD_SESSION_SECRET_FILE;
+    const sessionSecret =
+      secretFile !== undefined && secretFile.trim() !== ""
+        ? readSecret(secretFile, "SNOBOARD_SESSION_SECRET_FILE")
+        : randomBytes(32);
+    const github = readGithub(env, "write-connect");
+    return { modes, cloudflareAccess, publicUrl, sessionSecret, github, githubWriteConnect: true };
+  }
+  if (flagOn(env.SNOBOARD_GITHUB_WRITE_CONNECT, "SNOBOARD_GITHUB_WRITE_CONNECT")) {
+    invalid("SNOBOARD_GITHUB_WRITE_CONNECT is only for cloudflare-access; GitHub sign-in already connects write access");
   }
 
   const needsSession = modes.includes("password") || modes.includes("github");
@@ -241,7 +263,14 @@ function parseCommaList(
   return items;
 }
 
-function readGithub(env: NodeJS.ProcessEnv): GithubAuthConfig {
+function flagOn(value: string | undefined, label: string): boolean {
+  const flag = value?.trim().toLowerCase() ?? "";
+  if (flag === "" || flag === "false" || flag === "0") return false;
+  if (flag === "true" || flag === "1") return true;
+  invalid(`${label} must be true or false`);
+}
+
+function readGithub(env: NodeJS.ProcessEnv, use: "login" | "write-connect" = "login"): GithubAuthConfig {
   // The client id is not secret, but secret stores (Vault Agent, k8s secrets)
   // deliver files, so SNOBOARD_GITHUB_CLIENT_ID_FILE is accepted as well.
   const clientId =
@@ -255,6 +284,12 @@ function readGithub(env: NodeJS.ProcessEnv): GithubAuthConfig {
   }
   const allowedLogins = parseNameList(env.SNOBOARD_ALLOWED_GITHUB_LOGINS, "SNOBOARD_ALLOWED_GITHUB_LOGINS");
   const allowedOrgs = parseNameList(env.SNOBOARD_ALLOWED_GITHUB_ORGS, "SNOBOARD_ALLOWED_GITHUB_ORGS");
+  if (use === "write-connect") {
+    // GitHub repository permissions decide who can write. An optional login allowlist
+    // narrows it further; org checks would need read:org and are not offered here.
+    if (allowedOrgs.length > 0) invalid("SNOBOARD_ALLOWED_GITHUB_ORGS is not supported with SNOBOARD_GITHUB_WRITE_CONNECT");
+    return { clientId, clientSecret, allowedLogins, allowedOrgs, writeScope: readWriteScope(env.SNOBOARD_GITHUB_WRITE_SCOPE) };
+  }
   if (allowedLogins.length === 0 && allowedOrgs.length === 0) {
     invalid("GitHub login requires SNOBOARD_ALLOWED_GITHUB_LOGINS or SNOBOARD_ALLOWED_GITHUB_ORGS");
   }

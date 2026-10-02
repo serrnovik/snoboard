@@ -1,10 +1,5 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test, type Locator } from "@playwright/test";
 import { E2E_PASSWORD } from "./constants.ts";
-
-const imgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../docs/img");
 
 test("unauthenticated board API returns 401", async ({ request }) => {
   const response = await request.get("/api/board");
@@ -12,7 +7,6 @@ test("unauthenticated board API returns 401", async ({ request }) => {
 });
 
 test("password login walks the board, details, and graph", async ({ page }) => {
-  await mkdir(imgDir, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   const login = await page.goto("/login");
   expect(await login?.text()).toContain('localStorage.getItem("snoboard-theme")');
@@ -22,11 +16,6 @@ test("password login walks the board, details, and graph", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "In progress" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("card-acme-002")).toBeVisible();
   await expect(page.getByTestId("card-acme-003")).toBeVisible();
-  await page.evaluate(() => document.documentElement.classList.remove("dark"));
-  await page.screenshot({
-    path: path.join(imgDir, "board.png"),
-    animations: "disabled",
-  });
 
   await page.getByRole("combobox", { name: "Project" }).click();
   await page.getByRole("option", { name: "acme" }).click();
@@ -49,11 +38,6 @@ test("password login walks the board, details, and graph", async ({ page }) => {
   await page.getByRole("link", { name: "Dependencies" }).click();
   await expect(page.getByLabel("Dependency graph")).toBeVisible();
   await expect(page.getByText("acme-002").first()).toBeVisible();
-  await page.evaluate(() => document.documentElement.classList.remove("dark"));
-  await page.screenshot({
-    path: path.join(imgDir, "graph.png"),
-    animations: "disabled",
-  });
 
   await page.getByRole("radio", { name: "Dark" }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);

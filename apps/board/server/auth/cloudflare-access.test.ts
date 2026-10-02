@@ -49,7 +49,7 @@ describe("verifyAccessJwt", () => {
     const fetchMock = installCerts([[signing.jwk]]);
     const token = signRs256(signing, claims(NOW));
     const result = await verifyAccessJwt(token, access, NOW);
-    expect(result).toEqual({ ok: true, identity: { email: "ada@example.com", sub: "user-1" } });
+    expect(result).toMatchObject({ ok: true, identity: { email: "ada@example.com", sub: "user-1" } });
 
     const again = await verifyAccessJwt(token, access, NOW + 1_000);
     expect(again.ok).toBe(true);
@@ -128,7 +128,7 @@ describe("verifyAccessJwt", () => {
     const fetchMock = installCerts([[signing.jwk], [signing.jwk, rotated.jwk], [rotated.jwk]]);
     const token = signRs256(rotated, claims(NOW));
     const rotatedResult = await verifyAccessJwt(token, access, NOW);
-    expect(rotatedResult).toEqual({ ok: true, identity: { email: "ada@example.com", sub: "user-1" } });
+    expect(rotatedResult).toMatchObject({ ok: true, identity: { email: "ada@example.com", sub: "user-1" } });
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     const unknown = await verifyAccessJwt(signRs256(signing, claims(NOW), "kid-c"), access, NOW + 1_000);
@@ -157,7 +157,7 @@ describe("verifyAccessJwt", () => {
   it("allows an email by domain", async () => {
     installCerts([[signing.jwk]]);
     const result = await verifyAccessJwt(signRs256(signing, claims(NOW, { email: "Grace@Example.com" })), access, NOW);
-    expect(result).toEqual({ ok: true, identity: { email: "grace@example.com", sub: "user-1" } });
+    expect(result).toMatchObject({ ok: true, identity: { email: "grace@example.com", sub: "user-1" } });
   });
 
   it("allows an email by group", async () => {

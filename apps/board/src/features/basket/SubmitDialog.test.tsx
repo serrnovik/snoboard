@@ -129,9 +129,11 @@ describe("submit dialog", () => {
     render(<SubmitDialog />);
     await user.click(screen.getByRole("button", { name: "Submit" }));
     const dialog = await screen.findByRole("dialog");
-    expect((await within(dialog).findByTestId("validate-result")).textContent).toContain("stale");
+    expect((await within(dialog).findByTestId("validate-error")).textContent).toContain("The initiative changed");
     const button = within(dialog).getByRole("button", { name: "Submit edits" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+    expect(within(dialog).getByTestId("submit-blocked").textContent).toContain("None of these edits can be submitted");
+    expect(button.getAttribute("aria-describedby")).toBe(within(dialog).getByTestId("submit-blocked").id);
   });
 
   it("offers one-click pull request when a direct push is rejected", async () => {

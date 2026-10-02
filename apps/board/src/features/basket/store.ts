@@ -25,6 +25,10 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
   remove: (index: number) => void;
   clear: () => void;
   list: () => readonly Edit[];
+  /** Keep only the edits at `indices`; images of the dropped ones are forgotten. */
+  retain: (indices: readonly number[]) => void;
+  /** Insert edits before `index`, replacing queued edits with the same target (their `from` is kept). */
+  insertBefore: (index: number, edits: readonly Edit[]) => void;
   moveStatuses: (
     columns: Readonly<Record<string, readonly { id: string }[]>>,
     snapshotStatus: (id: string) => string | undefined,
@@ -87,6 +91,23 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
 
   const list = useCallback(() => cache.get(repoId) ?? readClient(repoId), [repoId]);
 
+  const retain = useCallback(
+    (indices: readonly number[]) => {
+      const current = cache.get(repoId) ?? readClient(repoId);
+      const keep = new Set(indices);
+      forgetImages(current.filter((_, index) => !keep.has(index)));
+      publish(current.filter((_, index) => keep.has(index)));
+    },
+    [publish, repoId],
+  );
+
+  const insertBefore = useCallback(
+    (index: number, added: readonly Edit[]) => {
+      publish(insertEditsBefore(cache.get(repoId) ?? readClient(repoId), index, added));
+    },
+    [publish, repoId],
+  );
+
   const moveStatuses = useCallback(
     (
       columns: Readonly<Record<string, readonly { id: string }[]>>,
@@ -97,7 +118,7 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
     [publish, repoId],
   );
 
-  return { edits, add, remove, clear, list, moveStatuses };
+  return { edits, add, remove, clear, list, retain, insertBefore, moveStatuses };
 }
 
 export function pendingEditsFor(edits: readonly Edit[], id: string): Edit[] {
@@ -215,6 +236,27 @@ function applyStatusColumns(
       }
     }
   }
+  return next;
+}
+
+/** Exported for tests. Parsed edits only; a same-target edit already queued is replaced in place of the new one. */
+export function insertEditsBefore(edits: readonly Edit[], index: number, added: readonly Edit[]): Edit[] {
+  let next = [...edits];
+  let at = Math.max(0, Math.min(index, next.length));
+  const inserted: Edit[] = [];
+  for (const raw of added) {
+    const parsed = EditSchema.safeParse(raw);
+    if (!parsed.success) continue;
+    let edit = parsed.data;
+    const existing = next.findIndex((entry) => sameTarget(entry, edit));
+    if (existing !== -1) {
+      edit = withFirstFrom(next[existing]!, edit);
+      next = next.filter((_, entryIndex) => entryIndex !== existing);
+      if (existing < at) at -= 1;
+    }
+    if (!isNoOp(edit)) inserted.push(edit);
+  }
+  next.splice(at, 0, ...inserted);
   return next;
 }
 

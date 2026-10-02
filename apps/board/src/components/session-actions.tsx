@@ -31,6 +31,7 @@ export function SessionActions() {
           aria-label="Sign out"
           className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "max-sm:size-8 max-sm:px-0")}
           href="/cdn-cgi/access/logout"
+          onClick={dropGithubWriteToken}
         >
           <LogOut aria-hidden="true" className="sm:hidden" />
           <span className="hidden sm:inline">Sign out</span>
@@ -46,6 +47,15 @@ export function SessionActions() {
       </Button>
     </form>
   );
+}
+
+/** Forget any GitHub write token connected under this Access login before signing out. */
+function dropGithubWriteToken(): void {
+  try {
+    void fetch("/auth/github/write", { method: "DELETE", credentials: "same-origin", keepalive: true }).catch(() => undefined);
+  } catch {
+    return;
+  }
 }
 
 async function loadSessionEmail(signal: AbortSignal, setEmail: (email: string) => void): Promise<void> {

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { editSettingsFor, findActiveRepo, listActiveRepos } from "../repos-config.js";
 import { getAuthConfig, type GithubAuthConfig, type GithubWriteScope } from "./env.js";
-import { renderAuthHtml, type BoardEnv } from "./middleware.js";
+import { readAccessIdentity, renderAuthHtml, type BoardEnv } from "./middleware.js";
 import {
   openEncoded,
   readCookie,
@@ -17,7 +17,14 @@ import {
   verifySession,
   type SessionClaims,
 } from "./session.js";
-import { clearWriteToken, sessionKeyOf, storeWriteToken, writeCookie } from "./write-tokens.js";
+import {
+  clearWriteToken,
+  ownerOfAccess,
+  ownerOfSession,
+  storeOwnerWriteToken,
+  writeCookie,
+  type WriteOwner,
+} from "./write-tokens.js";
 
 export const OAUTH_COOKIE = "snoboard_oauth";
 export const OAUTH_TTL_MS = 10 * 60 * 1000;
@@ -115,8 +122,8 @@ githubRouter.get("/github", (c) => {
 
 // Incremental write grant. Same OAuth app, same callback URL; the purpose
 // rides in the signed pending cookie, never in the query string.
-githubRouter.get("/github/write", (c) => {
-  const ready = githubReady();
+githubRouter.get("/github/write", async (c) => {
+  const ready = writeConnectReady();
   if (ready === null) return c.notFound();
   // The target repo picks the scope (public_repo vs repo); editing must be on for that repo.
   const repoId = c.req.query("repo") ?? listActiveRepos()[0]?.id ?? "default";
@@ -124,15 +131,18 @@ githubRouter.get("/github/write", (c) => {
   const { config, github, secret } = ready;
   c.header("Cache-Control", "no-store");
   c.header("Referrer-Policy", "no-referrer");
-  const session = readGithubSession(c, secret);
-  if (session === null) return c.redirect("/login", 302);
+  const owner = await readWriteOwner(c, secret);
+  if (owner === null) {
+    if (accessBoard()) return writeRejected(c, "Cloudflare Access did not identify you. Reload the board and retry.");
+    return c.redirect("/login", 302);
+  }
   const pending: OAuthPending = {
     state: randomBytes(32).toString("base64url"),
     verifier: randomBytes(32).toString("base64url"),
     exp: Date.now() + OAUTH_TTL_MS,
     purpose: "write",
     returnTo: safeReturnPath(c.req.query("return"), config.publicUrl ?? ""),
-    sessionKey: sessionKeyOf(session),
+    sessionKey: owner.key,
     scope: findActiveRepo(repoId)?.edit.githubWriteScope ?? writeScopeOf(github),
   };
   c.header(
@@ -146,15 +156,22 @@ githubRouter.get("/github/write", (c) => {
   return c.redirect(authorizeUrl(config.publicUrl ?? "", github, pending), 302);
 });
 
-githubRouter.delete("/github/write", (c) => {
-  if (githubReady() === null) return c.notFound();
+githubRouter.delete("/github/write", async (c) => {
+  const ready = writeConnectReady();
+  if (ready === null) return c.notFound();
   c.header("Cache-Control", "no-store");
+  // /auth/* skips the Access middleware; verify the Access token here so the
+  // right owner's token is dropped (the handle cookie alone still clears its own).
+  if (accessBoard()) {
+    const identity = await readAccessIdentity(c, ready.config);
+    if (identity !== null) c.set("identity", identity);
+  }
   clearWriteToken(c);
   return c.body(null, 204);
 });
 
 githubRouter.get("/github/callback", async (c) => {
-  const ready = githubReady();
+  const ready = writeConnectReady();
   if (ready === null) return c.notFound();
   const { config, github, secret } = ready;
   c.header("Cache-Control", "no-store");
@@ -163,6 +180,8 @@ githubRouter.get("/github/callback", async (c) => {
   const pending = openPendingCookie(c, secret);
   clearOauthCookie(c, config.publicUrl ?? "");
   if (pending === null) return stateRejected(c);
+  // On an Access board the OAuth client only connects write access, never signs in.
+  if (pending.purpose === "login" && githubReady() === null) return stateRejected(c);
   const queryState = c.req.query("state") ?? "";
   if (!safeEqual(queryState, pending.state)) return stateRejected(c);
   // The pending cookie is a stateless signed blob, so a copy could be replayed
@@ -178,10 +197,10 @@ githubRouter.get("/github/callback", async (c) => {
   if (!CODE_PATTERN.test(code)) return stateRejected(c);
   // A write grant needs the same signed-in GitHub session that started it.
   // Checked before the code exchange so a stray write callback costs no GitHub call.
-  let writer: SessionClaims | null = null;
+  let writer: WriteOwner | null = null;
   if (pending.purpose === "write") {
-    writer = readGithubSession(c, secret);
-    if (writer === null || pending.sessionKey === undefined || !safeEqual(sessionKeyOf(writer), pending.sessionKey)) {
+    writer = await readWriteOwner(c, secret);
+    if (writer === null || pending.sessionKey === undefined || !safeEqual(writer.key, pending.sessionKey)) {
       return writeRejected(c, "Your board session changed. Sign in again, then retry.");
     }
   }
@@ -191,9 +210,16 @@ githubRouter.get("/github/callback", async (c) => {
   const login = await fetchLogin(accessToken);
   if (login === null) return unavailable(c);
   if (writer !== null) {
-    if (login.toLowerCase() !== writer.sub.toLowerCase()) {
-      githubLogger.info("GitHub write grant rejected: login does not match the session");
-      return writeRejected(c, "GitHub signed in as a different account than this board session.");
+    if (writer.accessEmail === undefined) {
+      if (login.toLowerCase() !== writer.bind.toLowerCase()) {
+        githubLogger.info("GitHub write grant rejected: login does not match the session");
+        return writeRejected(c, "GitHub signed in as a different account than this board session.");
+      }
+    } else if (github.allowedLogins.length > 0 && !github.allowedLogins.includes(login.toLowerCase())) {
+      // Access boards: GitHub repo permissions decide who can write; the
+      // optional SNOBOARD_ALLOWED_GITHUB_LOGINS narrows it further.
+      githubLogger.info(`GitHub write grant rejected for ${writer.accessEmail}: ${login} is not an allowed GitHub login`);
+      return writeRejected(c, `The GitHub account ${login} is not allowed to submit edits on this Snoboard.`);
     }
     if (!grantsWrite(exchanged.scope, pending.scope ?? writeScopeOf(github))) {
       githubLogger.info("GitHub write grant rejected: write scope was not granted");
@@ -201,9 +227,13 @@ githubRouter.get("/github/callback", async (c) => {
     }
     let stored: { handle: string; maxAgeSeconds: number };
     try {
-      stored = storeWriteToken(secret, writer, accessToken);
+      // The token was just checked against GET /user; `login` is who it belongs to.
+      stored = storeOwnerWriteToken(secret, writer, accessToken, writer.accessEmail === undefined ? writer.bind : login);
     } catch {
       return unavailable(c);
+    }
+    if (writer.accessEmail !== undefined) {
+      githubLogger.info(`GitHub write access connected for ${writer.accessEmail} as ${login}`);
     }
     c.header("set-cookie", writeCookie(stored.handle, stored.maxAgeSeconds), { append: true });
     return c.redirect(pending.returnTo ?? "/", 302);
@@ -316,6 +346,20 @@ function readGithubSession(c: Context<BoardEnv>, secret: Buffer): SessionClaims 
   return claims;
 }
 
+/** Who a write grant belongs to: the GitHub session, or on Access boards the verified Access login. */
+async function readWriteOwner(c: Context<BoardEnv>, secret: Buffer): Promise<WriteOwner | null> {
+  if (accessBoard()) {
+    const identity = await readAccessIdentity(c, getAuthConfig());
+    return identity === null ? null : ownerOfAccess(identity);
+  }
+  const session = readGithubSession(c, secret);
+  return session === null ? null : ownerOfSession(session);
+}
+
+function accessBoard(): boolean {
+  return getAuthConfig().modes.includes("cloudflare-access");
+}
+
 function writeScopeOf(github: GithubAuthConfig): GithubWriteScope {
   return github.writeScope ?? "repo";
 }
@@ -342,6 +386,16 @@ function githubReady(): {
 } | null {
   const config = getAuthConfig();
   if (!config.modes.includes("github")) return null;
+  if (config.github === undefined || config.sessionSecret === undefined || config.publicUrl === undefined) return null;
+  return { config, github: config.github, secret: config.sessionSecret };
+}
+
+/** GitHub sign-in, or (Access boards with SNOBOARD_GITHUB_WRITE_CONNECT) write-connect only. */
+function writeConnectReady(): ReturnType<typeof githubReady> {
+  const login = githubReady();
+  if (login !== null) return login;
+  const config = getAuthConfig();
+  if (config.githubWriteConnect !== true || !config.modes.includes("cloudflare-access")) return null;
   if (config.github === undefined || config.sessionSecret === undefined || config.publicUrl === undefined) return null;
   return { config, github: config.github, secret: config.sessionSecret };
 }

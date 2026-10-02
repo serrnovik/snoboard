@@ -18,10 +18,11 @@ The image includes `git` and `openssh-client`, runs as uid/gid 10001, and does n
 | `SNOBOARD_AUTH_MODES` | no | Comma-separated `password`, `github`, `none`. See [auth.md](auth.md) |
 | `SNOBOARD_AUTH_ALLOW_NONE` | for `none` | Must be `true` or `none` is refused |
 | `SNOBOARD_PUBLIC_URL` | for sign-in | Public origin, scheme included, no path |
-| `SNOBOARD_SESSION_SECRET_FILE` | for `password` and `github` | Path to a secret of at least 32 bytes |
+| `SNOBOARD_SESSION_SECRET_FILE` | for `password` and `github` | Path to a secret of at least 32 bytes (optional with `SNOBOARD_GITHUB_WRITE_CONNECT`) |
 | `SNOBOARD_PASSWORD_HASH_FILE` | for `password` | Path to the argon2id hash file |
 | `SNOBOARD_GITHUB_CLIENT_ID` or `SNOBOARD_GITHUB_CLIENT_ID_FILE` | for `github` | OAuth app client id (value, or a file holding it) |
 | `SNOBOARD_GITHUB_CLIENT_SECRET_FILE` | for `github` | Path to the OAuth client secret |
+| `SNOBOARD_GITHUB_WRITE_CONNECT` | no | `true` on a `cloudflare-access` board: use the OAuth client only to connect each person's GitHub write token at submit. Needs `SNOBOARD_PUBLIC_URL` and the client id/secret. See [auth.md](auth.md#connect-github-at-submit-cloudflare-access) |
 | `SNOBOARD_ALLOWED_GITHUB_LOGINS` | no | Comma-separated GitHub logins |
 | `SNOBOARD_ALLOWED_GITHUB_ORGS` | no | Comma-separated GitHub organizations |
 | `SNOBOARD_GITHUB_TOKEN_FILE` | no | Path to a read-only token for pull request and check status |

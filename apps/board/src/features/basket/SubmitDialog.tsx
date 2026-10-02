@@ -10,16 +10,18 @@ import {
 } from "@/components/ui/dialog";
 import { parseEditConfig, type ClientEditConfig, type EditModeName } from "@/features/basket/edit-config";
 import { EditLabel } from "@/features/basket/EditLabel";
-import { DEFAULT_REPO_ID, useBasket } from "@/features/basket/store";
+import { DEFAULT_REPO_ID, describeEdit, useBasket } from "@/features/basket/store";
+import {
+  quickFixFor,
+  readableError,
+  recordValidation,
+  type QuickFix,
+  type ValidateResult,
+} from "@/features/basket/validation";
+import { CircleAlert, CircleCheck } from "lucide-react";
 import type { Edit } from "snoboard/browser";
 import { repoApi } from "@/lib/routes";
 import { getImage } from "@/features/attachments/store";
-
-type ValidateResult = {
-  index: number;
-  ok: boolean;
-  error?: string;
-};
 
 type SubmitSuccess = {
   ok: true;
@@ -104,6 +106,8 @@ export function SubmitDialog({
   const [config, setConfig] = useState<ClientEditConfig | null>(null);
   const [mode, setMode] = useState<EditModeName>("direct");
   const [results, setResults] = useState<ValidateResult[] | null>(null);
+  // Bumped after Remove or a quick fix so the basket is checked again.
+  const [round, setRound] = useState(0);
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
@@ -121,15 +125,19 @@ export function SubmitDialog({
     setFailure(null);
     setSuccess(null);
     setProblem(null);
+    const validation =
+      edits.length === 0
+        ? Promise.resolve(null)
+        : fetch(repoApi(repoId, "/edits/validate"), {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ edits }),
+            signal: controller.signal,
+          });
     void Promise.all([
       fetch(repoApi(repoId, "/edit-config"), { credentials: "same-origin", signal: controller.signal }),
-      fetch(repoApi(repoId, "/edits/validate"), {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ edits }),
-        signal: controller.signal,
-      }),
+      validation,
     ])
       .then(async ([configResponse, validateResponse]) => {
         if (controller.signal.aborted) return;
@@ -137,6 +145,10 @@ export function SubmitDialog({
         const nextConfig = parseEditConfig(configBody);
         setConfig(nextConfig);
         setMode(rememberedSubmitMode(repoId, nextConfig.modes, nextConfig.defaultMode));
+        if (validateResponse === null) {
+          setResults([]);
+          return;
+        }
         if (!validateResponse.ok) {
           const validateBody: unknown = await validateResponse.json().catch(() => null);
           setProblem(messageOf(validateBody) ?? "Could not check the basket.");
@@ -144,7 +156,9 @@ export function SubmitDialog({
           return;
         }
         const validateBody: unknown = await validateResponse.json().catch(() => null);
-        setResults(parseResults(validateBody));
+        const parsed = parseResults(validateBody);
+        recordValidation(repoId, edits, parsed);
+        setResults(parsed);
       })
       .catch(() => {
         if (controller.signal.aborted) return;
@@ -154,14 +168,29 @@ export function SubmitDialog({
         if (!controller.signal.aborted) setChecking(false);
       });
     return () => controller.abort();
-  }, [open, repoId, basket.list]);
+  }, [open, repoId, basket.list, round]);
 
   function chooseMode(next: EditModeName) {
     setMode(next);
     rememberSubmitMode(repoId, next);
   }
 
-  async function send(nextMode: EditModeName) {
+  function recheck() {
+    setResults(null);
+    setRound((value) => value + 1);
+  }
+
+  function removeEdit(index: number) {
+    basket.remove(index);
+    recheck();
+  }
+
+  function applyFix(index: number, fix: QuickFix) {
+    basket.insertBefore(index, fix.edits);
+    recheck();
+  }
+
+  async function send(nextMode: EditModeName, onlyIndices?: readonly number[]) {
     const current = config;
     if (current?.csrf === undefined) {
       setProblem("Reload the board and try again.");
@@ -169,7 +198,9 @@ export function SubmitDialog({
     }
     setBusy(true);
     setProblem(null);
-    const sent = basket.list();
+    const all = basket.list();
+    const picked = onlyIndices === undefined ? undefined : new Set(onlyIndices);
+    const sent = picked === undefined ? all : all.filter((_, index) => picked.has(index));
     try {
       const attachments = await attachmentPayload(sent);
       if ("error" in attachments) {
@@ -205,7 +236,12 @@ export function SubmitDialog({
       }
       if (parsed.ok) {
         setSubmitted(sent);
-        basket.clear();
+        if (picked === undefined) {
+          basket.clear();
+        } else {
+          // Invalid edits stay in the basket for a later fix.
+          basket.retain(all.flatMap((_, index) => (picked.has(index) ? [] : [index])));
+        }
         setFailure(null);
         setSuccess(parsed);
         return;
@@ -222,12 +258,16 @@ export function SubmitDialog({
   }
 
   const edits = basket.list();
-  const valid = results !== null && results.length > 0 && results.every((result) => result.ok);
+  const failing = results === null ? [] : results.filter((result) => !result.ok);
+  const validIndices = results === null ? [] : results.filter((result) => result.ok).map((result) => result.index);
+  const allValid = results !== null && results.length > 0 && failing.length === 0;
+  const someValid = failing.length > 0 && validIndices.length > 0;
   const needsGithubWrite = config?.needsGithubWrite === true;
   const offerPr =
     failure !== null &&
     (config?.modes.includes("pr") ?? false) &&
     (failure.alternativeMode === "pr" || failure.code === "direct_rejected" || failure.code === "branch_moved");
+  const blockedReason = submitBlockedReason({ checking, config, results, problem, validCount: validIndices.length });
 
   // Nothing to submit and nothing to report: no trigger. Once open, the dialog
   // stays mounted after a successful submit clears the basket, so the result shows.
@@ -246,7 +286,7 @@ export function SubmitDialog({
       }}
     >
       <DialogTrigger render={<Button type="button" />}>Submit</DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Submit basket</DialogTitle>
           <DialogDescription>Check the edits, then save them. Nothing is written until this succeeds.</DialogDescription>
@@ -257,18 +297,72 @@ export function SubmitDialog({
             {problem}
           </p>
         ) : null}
-        {results !== null && success === null ? (
-          <ul className="flex flex-col gap-1">
+        {results !== null && success === null && results.length > 0 ? (
+          failing.length > 0 ? (
+            <p
+              role="status"
+              data-testid="validate-summary"
+              className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-sm font-medium text-destructive"
+            >
+              <CircleAlert aria-hidden className="size-4 shrink-0" />
+              {`${failing.length} of ${results.length} ${results.length === 1 ? "edit" : "edits"} ${failing.length === 1 ? "needs" : "need"} attention`}
+            </p>
+          ) : (
+            <p role="status" data-testid="validate-summary" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CircleCheck aria-hidden className="size-4 shrink-0 text-emerald-600" />
+              {results.length === 1 ? "The edit is valid" : `All ${results.length} edits are valid`}
+            </p>
+          )
+        ) : null}
+        {results !== null && success === null && results.length > 0 ? (
+          <ul className="flex max-h-[45vh] flex-col gap-1 overflow-y-auto pr-1">
             {results.map((result) => {
               const edit = edits[result.index];
+              const label = edit === undefined ? `Edit ${result.index + 1}` : describeEdit(edit, titles);
+              const fix = result.ok ? undefined : quickFixFor(edit, result.error);
               return (
-                <li key={result.index} data-testid="validate-result" className="min-w-0 text-sm">
-                  {edit === undefined ? (
-                    `Edit ${result.index + 1}`
-                  ) : (
-                    <EditLabel edit={edit} titles={titles} />
+                <li
+                  key={result.index}
+                  data-testid="validate-result"
+                  data-valid={result.ok ? "true" : "false"}
+                  className={
+                    result.ok
+                      ? "min-w-0 px-2 text-sm"
+                      : "flex min-w-0 flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-sm"
+                  }
+                >
+                  {edit === undefined ? label : <EditLabel edit={edit} titles={titles} />}
+                  {result.ok ? null : (
+                    <>
+                      <span data-testid="validate-error" className="flex items-start gap-1.5 text-destructive">
+                        <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+                        <span>{readableError(result.error)}</span>
+                      </span>
+                      <span className="flex flex-wrap gap-2">
+                        {fix !== undefined ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || checking}
+                            onClick={() => applyFix(result.index, fix)}
+                          >
+                            {fix.label}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Remove ${label}`}
+                          disabled={busy || checking}
+                          onClick={() => removeEdit(result.index)}
+                        >
+                          Remove
+                        </Button>
+                      </span>
+                    </>
                   )}
-                  {result.ok ? null : `: ${result.error ?? "invalid"}`}
                 </li>
               );
             })}
@@ -280,6 +374,7 @@ export function SubmitDialog({
             edits={submitted}
             titles={titles}
             forgeRepo={config?.forgeRepo}
+            remaining={edits.length}
             onDone={() => {
               setOpen(false);
               setSuccess(null);
@@ -294,7 +389,7 @@ export function SubmitDialog({
           </p>
         ) : null}
         {offerPr ? (
-          <Button type="button" disabled={busy} onClick={() => void send("pr")}>
+          <Button type="button" disabled={busy} onClick={() => void send("pr", someValid ? validIndices : undefined)}>
             Open a PR instead
           </Button>
         ) : null}
@@ -322,14 +417,79 @@ export function SubmitDialog({
             Connect GitHub
           </a>
         ) : null}
+        {success === null && !needsGithubWrite && config?.githubLogin !== undefined ? (
+          <p data-testid="github-connected" className="text-sm text-muted-foreground">
+            Signed in to GitHub as {config.githubLogin}
+          </p>
+        ) : null}
+        {success === null && !needsGithubWrite && config?.githubWriteConnect === true && config.githubLogin === undefined ? (
+          <a href={githubWriteHref(repoId)} className="text-sm underline">
+            Connect GitHub to commit as yourself
+          </a>
+        ) : null}
         {success === null && !needsGithubWrite ? (
-          <Button type="button" disabled={!valid || busy || checking || config?.csrf === undefined} onClick={() => void send(mode)}>
-            {busy ? "Submitting…" : "Submit edits"}
-          </Button>
+          <div className="flex flex-col gap-1">
+            {someValid ? (
+              <>
+                <Button
+                  type="button"
+                  disabled={busy || checking || config?.csrf === undefined}
+                  onClick={() => void send(mode, validIndices)}
+                >
+                  {busy
+                    ? "Submitting…"
+                    : validIndices.length === 1
+                      ? "Submit the 1 valid edit"
+                      : `Submit the ${validIndices.length} valid edits`}
+                </Button>
+                <p data-testid="submit-partial-note" className="text-xs text-muted-foreground">
+                  {failing.length === 1
+                    ? "The edit marked above stays in the basket."
+                    : `The ${failing.length} edits marked above stay in the basket.`}
+                </p>
+              </>
+            ) : (
+              <Button
+                type="button"
+                disabled={!allValid || busy || checking || config?.csrf === undefined}
+                aria-describedby={blockedReason === null ? undefined : `${modeGroup}-blocked`}
+                onClick={() => void send(mode)}
+              >
+                {busy ? "Submitting…" : "Submit edits"}
+              </Button>
+            )}
+            {blockedReason !== null ? (
+              <p id={`${modeGroup}-blocked`} data-testid="submit-blocked" className="text-xs text-muted-foreground">
+                {blockedReason}
+              </p>
+            ) : null}
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Why the submit button is disabled, or null when it is not (or the reason is already on screen). */
+export function submitBlockedReason({
+  checking,
+  config,
+  results,
+  problem,
+  validCount,
+}: {
+  checking: boolean;
+  config: ClientEditConfig | null;
+  results: readonly ValidateResult[] | null;
+  problem: string | null;
+  validCount: number;
+}): string | null {
+  if (checking) return null;
+  if (config !== null && config.csrf === undefined) return "Reload the board and try again.";
+  if (results === null) return problem === null ? null : "The basket could not be checked, so nothing can be submitted yet.";
+  if (results.length === 0) return "The basket is empty.";
+  if (validCount === 0) return "None of these edits can be submitted. Fix or remove the ones marked above.";
+  return null;
 }
 
 function SubmitResult({
@@ -337,12 +497,14 @@ function SubmitResult({
   edits,
   titles,
   forgeRepo,
+  remaining = 0,
   onDone,
 }: {
   success: SubmitSuccess;
   edits: readonly Edit[];
   titles?: ReadonlyMap<string, string>;
   forgeRepo?: string;
+  remaining?: number;
   onDone: () => void;
 }) {
   const created = new Map((success.created ?? []).map((entry) => [entry.index, entry]));
@@ -386,6 +548,11 @@ function SubmitResult({
           Pushed {short} to {success.branch}
         </p>
       )}
+      {remaining > 0 ? (
+        <p data-testid="submit-remaining" className="text-sm text-muted-foreground">
+          {remaining === 1 ? "1 edit stays" : `${remaining} edits stay`} in the basket to fix later.
+        </p>
+      ) : null}
       <Button type="button" onClick={onDone}>
         Done
       </Button>

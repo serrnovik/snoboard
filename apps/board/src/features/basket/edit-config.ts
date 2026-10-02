@@ -9,6 +9,10 @@ export type ClientEditConfig = {
   enabled: boolean;
   canSubmit: boolean;
   needsGithubWrite: boolean;
+  /** Access board where a GitHub write token can be connected at submit time. */
+  githubWriteConnect?: boolean;
+  /** GitHub login of the connected write token, when there is one. */
+  githubLogin?: string;
   modes: EditModeName[];
   defaultMode: EditModeName;
   csrf?: string;
@@ -70,6 +74,10 @@ export function parseEditConfig(value: unknown): ClientEditConfig {
     enabled: value.enabled === true,
     canSubmit: value.canSubmit === true,
     needsGithubWrite: value.needsGithubWrite === true,
+    ...(value.githubWriteConnect === true ? { githubWriteConnect: true } : {}),
+    ...(typeof value.githubLogin === "string" && /^[A-Za-z0-9-]{1,39}$/.test(value.githubLogin)
+      ? { githubLogin: value.githubLogin }
+      : {}),
     modes,
     defaultMode,
     ...(typeof value.csrf === "string" && value.csrf.length > 0 ? { csrf: value.csrf } : {}),

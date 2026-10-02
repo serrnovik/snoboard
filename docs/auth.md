@@ -97,7 +97,8 @@ edits (`GET /auth/github/write`), so people who only look at the board never han
 - **Replicas.** Tokens live in one process. A restart loses them (people reconnect), and several replicas need
   sticky sessions. Run one replica when editing is on.
 
-Password and Cloudflare Access deployments never offer this flow.
+Password deployments never offer this flow. Cloudflare Access deployments can, with the explicit switch in
+[Connect GitHub at submit](#connect-github-at-submit-cloudflare-access).
 
 ## `none` behind a trusted proxy
 
@@ -112,7 +113,7 @@ Do not publish `none` on an open network. Anyone who can reach the port can read
 
 ## Cloudflare Access
 
-`cloudflare-access` trusts a signed Cloudflare Access JWT. The board does not ask for a password, does not keep a session secret, and does not run a GitHub OAuth app. The browser shows who is signed in. Sign out goes to `/cdn-cgi/access/logout`.
+`cloudflare-access` trusts a signed Cloudflare Access JWT. The board does not ask for a password and does not keep a session. A GitHub OAuth app is used only if you turn on [Connect GitHub at submit](#connect-github-at-submit-cloudflare-access). The browser shows who is signed in. Sign out goes to `/cdn-cgi/access/logout`.
 
 The board must only be reachable through Cloudflare Access. Do not publish the application port on an open network. Snoboard accepts the `Cf-Access-Jwt-Assertion` header only. A `CF_Authorization` cookie or a `Cf-Access-Authenticated-User-Email` header is not sign-in.
 
@@ -130,3 +131,38 @@ SNOBOARD_CF_ACCESS_ALLOWED_GROUPS=board-readers
 `SNOBOARD_CF_ACCESS_AUD` is the Access application audience tag. More than one tag is allowed, separated by commas.
 
 `SNOBOARD_ALLOWED_EMAILS` or `SNOBOARD_ALLOWED_EMAIL_DOMAINS` is required; groups are only an extra allowlist, because Access tokens include `groups` only when the IdP is set up to send them. A person is allowed when their email matches `SNOBOARD_ALLOWED_EMAILS`, the host after `@` matches `SNOBOARD_ALLOWED_EMAIL_DOMAINS`, or any `groups` value in the JWT matches `SNOBOARD_CF_ACCESS_ALLOWED_GROUPS`. Email and domain checks are case-insensitive. The domain is matched exactly, so `ada@example.com` matches `example.com` and `ada@mail.example.com` does not.
+
+### Connect GitHub at submit (Cloudflare Access)
+
+People keep signing in with Cloudflare Access only. When they submit edits, the board asks them to connect GitHub
+once; the commit is then made with their own GitHub token. Browsing never needs GitHub.
+
+Create a GitHub OAuth app as in [GitHub](#github) (callback `<SNOBOARD_PUBLIC_URL>/auth/github/callback`, behind the
+same Access application), then set:
+
+```sh
+SNOBOARD_AUTH_MODES=cloudflare-access
+SNOBOARD_GITHUB_WRITE_CONNECT=true
+SNOBOARD_PUBLIC_URL=https://board.example.com
+SNOBOARD_GITHUB_CLIENT_ID_FILE=/run/secrets/github-client-id   # or SNOBOARD_GITHUB_CLIENT_ID
+SNOBOARD_GITHUB_CLIENT_SECRET_FILE=/run/secrets/github-client.secret
+# Optional:
+SNOBOARD_SESSION_SECRET_FILE=/run/secrets/session.secret      # else a random key per process
+SNOBOARD_ALLOWED_GITHUB_LOGINS=ada,grace                      # only these GitHub accounts may connect
+SNOBOARD_GITHUB_WRITE_SCOPE=public_repo                       # public repositories only
+```
+
+- **Explicit.** The OAuth client is ignored on an Access board unless `SNOBOARD_GITHUB_WRITE_CONNECT=true`. It is
+  never a sign-in method there: `/auth/github` stays `404`. `SNOBOARD_ALLOWED_GITHUB_ORGS` is refused with this switch.
+- **Who may write.** GitHub repository permissions decide. If `SNOBOARD_ALLOWED_GITHUB_LOGINS` is set, a GitHub
+  account outside it is refused at the callback.
+- **Checks.** `/auth/github/write` and the callback verify the `Cf-Access-Jwt-Assertion` themselves. The callback must
+  come from the same Access login that started the flow; it checks the token with `GET /user` and records that login.
+  There is no login-equality check, because the Access identity is an email, not a GitHub login.
+- **Storage.** As for GitHub sign-in: AES-256-GCM in memory, at most one hour and never past the Access token's
+  expiry, keyed by the Access login (email, subject, token issue time). The token and the GitHub login are kept
+  together with the Access email. A different Access user, or the same person after signing out of Access and back in,
+  cannot use it. The board's Sign out link drops it (`DELETE /auth/github/write`) before going to
+  `/cdn-cgi/access/logout`.
+- **Session secret.** Without `SNOBOARD_SESSION_SECRET_FILE`, a random key is made at startup; a restart already forgets
+  every write token, so nothing else is lost.

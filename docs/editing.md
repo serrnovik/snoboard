@@ -8,6 +8,7 @@ Snoboard can save small changes from the board: status, priority, phase status, 
 | `SNOBOARD_EDIT_BASE_BRANCH` | Branch pull requests target. Defaults to the repository's default branch |
 | `SNOBOARD_EDIT_DIRECT_BRANCH` | Branch `direct` updates. Required when `direct` is enabled. This is usually `main` |
 | `SNOBOARD_EDIT_BOT_TOKEN_FILE` | Optional token file so password and Cloudflare Access users can submit |
+| `SNOBOARD_GITHUB_WRITE_CONNECT` | `true` lets Cloudflare Access users connect their own GitHub at submit (see [auth.md](auth.md#connect-github-at-submit-cloudflare-access)) |
 | `SNOBOARD_PASSWORD_NAME` | Optional label in bot commit trailers. Defaults to `password-user` |
 
 `direct` is the default when it is allowed. The board remembers the last choice for each repository in the browser.
@@ -60,6 +61,19 @@ Snoboard-Edit-By: ada@example.com (via bot)
 ```
 
 Password sign-in uses `password-user` unless `SNOBOARD_PASSWORD_NAME` is set. Cloudflare Access uses the signed-in email. Without the bot file, those users see a read-only message and no submit button.
+
+Cloudflare Access users can instead submit as themselves when `SNOBOARD_GITHUB_WRITE_CONNECT=true` and a GitHub
+OAuth client is configured ([auth.md](auth.md#connect-github-at-submit-cloudflare-access)). The submit dialog shows
+**Connect GitHub**; after the grant it shows "Signed in to GitHub as `<login>`" and the commit is made with that
+person's token, so GitHub records them as author. The trailer names both:
+
+```text
+Snoboard-Edit-By: octocat (ada@example.com)
+```
+
+With a bot token as well, Access users can submit through the bot right away, or connect GitHub to commit as
+themselves; a connected token always wins. The submit log line carries `user=` (Access email) and `github=` (login).
+Rate limits and the one-submit-at-a-time lock count per Access email.
 
 ## Bot token
 
