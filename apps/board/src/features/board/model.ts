@@ -1,6 +1,21 @@
 import type { BoardItem, LegacyItem, ParsedFileError, RefInfo } from "snoboard/browser";
 
 export const DONE_WINDOW_DAYS = 14;
+export const DEFAULT_STALE_AFTER_DAYS = 30;
+const DAY_MS = 86_400_000;
+// Same exemption as `snoboard validate` / `status --stale`: these may sit untouched.
+const STALE_EXEMPT = new Set(["parked", "dropped"]);
+
+/** Closed = done statuses plus parked/dropped. Closed columns show recent items by default. */
+export function isClosedStatus(status: string, doneStatuses: readonly string[]): boolean {
+  return doneStatuses.includes(status) || STALE_EXEMPT.has(status);
+}
+
+/**
+ * Which closed columns show every item. URL: `closed=all` (every closed column) or
+ * `closed=parked,dropped` (per column). The older `done=all` still means "all".
+ */
+export type ShowAllClosed = "all" | string[];
 
 export type BoardStatus = {
   lastFetchAt: string | null;
@@ -13,6 +28,19 @@ export type BoardConfig = {
   statuses: string[];
   priorities: string[];
   doneStatuses: string[];
+  staleAfterDays?: number;
+};
+
+export type ProposalField = {
+  field: string;
+  value: string;
+};
+
+export type Proposal = {
+  branch: string;
+  initiativeId: string;
+  fields: ProposalField[];
+  pr?: { number: number; url: string };
 };
 
 export type BoardPayload = {
@@ -22,6 +50,7 @@ export type BoardPayload = {
   legacy: LegacyItem[];
   errors: ParsedFileError[];
   refs: RefInfo[];
+  proposals?: Proposal[];
 };
 
 export type BoardQuery = {
@@ -30,7 +59,8 @@ export type BoardQuery = {
   priority: string | null;
   search: string;
   showLegacy: boolean;
-  showAllDone: boolean;
+  showAllClosed: ShowAllClosed;
+  hideStale: boolean;
 };
 
 export function emptyBoardQuery(): BoardQuery {
@@ -40,7 +70,8 @@ export function emptyBoardQuery(): BoardQuery {
     priority: null,
     search: "",
     showLegacy: false,
-    showAllDone: false,
+    showAllClosed: [],
+    hideStale: false,
   };
 }
 
@@ -52,7 +83,8 @@ export function parseBoardQuery(search: string): BoardQuery {
     priority: present(params.get("priority")),
     search: params.get("q") ?? "",
     showLegacy: params.get("legacy") === "1",
-    showAllDone: params.get("done") === "all",
+    showAllClosed: parseShowAllClosed(params),
+    hideStale: params.get("stale") === "hide",
   };
 }
 
@@ -65,9 +97,38 @@ export function serializeBoardQuery(currentSearch: string, next: BoardQuery): st
   assign(params, "priority", next.priority);
   assign(params, "q", next.search.length > 0 ? next.search : null);
   assign(params, "legacy", next.showLegacy ? "1" : null);
-  assign(params, "done", next.showAllDone ? "all" : null);
+  params.delete("done");
+  assign(
+    params,
+    "closed",
+    next.showAllClosed === "all" ? "all" : next.showAllClosed.length > 0 ? next.showAllClosed.join(",") : null,
+  );
+  assign(params, "stale", next.hideStale ? "hide" : null);
   const query = params.toString();
   return query.length === 0 ? "" : `?${query}`;
+}
+
+function parseShowAllClosed(params: URLSearchParams): ShowAllClosed {
+  const closed = params.get("closed");
+  if (params.get("done") === "all" || closed === "all") return "all";
+  if (closed === null) return [];
+  return uniqueSorted(closed.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0));
+}
+
+export function showsAllClosed(showAllClosed: ShowAllClosed, status: string): boolean {
+  return showAllClosed === "all" || showAllClosed.includes(status);
+}
+
+/** Toggle one closed column between "show all" and "show recent". */
+export function toggleShowAllClosed(
+  showAllClosed: ShowAllClosed,
+  status: string,
+  closedStatuses: readonly string[],
+): ShowAllClosed {
+  const current = showAllClosed === "all" ? [...closedStatuses] : showAllClosed;
+  const next = current.includes(status) ? current.filter((entry) => entry !== status) : [...current, status];
+  const sorted = uniqueSorted(next);
+  return closedStatuses.length > 0 && closedStatuses.every((entry) => sorted.includes(entry)) ? "all" : sorted;
 }
 
 export function isBoardPayload(value: unknown): value is BoardPayload {
@@ -109,6 +170,25 @@ export function matchesFilters(item: BoardItem, query: BoardQuery): boolean {
   return `${item.id} ${item.title}`.toLowerCase().includes(needle);
 }
 
+/**
+ * An open initiative is stale when neither its `updated` date nor its last commit
+ * is newer than `staleAfterDays`. Done, parked and dropped initiatives are never stale.
+ */
+export function isStale(
+  item: Pick<BoardItem, "status" | "updated" | "updatedAt">,
+  doneStatuses: readonly string[],
+  staleAfterDays: number,
+  now: number,
+): boolean {
+  if (doneStatuses.includes(item.status) || STALE_EXEMPT.has(item.status)) return false;
+  const touched = Math.max(
+    Date.parse(`${item.updated}T00:00:00.000Z`) || 0,
+    Date.parse(item.updatedAt) || 0,
+  );
+  if (touched === 0) return false;
+  return now - touched > staleAfterDays * DAY_MS;
+}
+
 export function isWithinDoneWindow(updated: string, now: number): boolean {
   const updatedMs = Date.parse(`${updated}T00:00:00.000Z`);
   if (Number.isNaN(updatedMs)) return false;
@@ -118,22 +198,46 @@ export function isWithinDoneWindow(updated: string, now: number): boolean {
   return ageDays <= DONE_WINDOW_DAYS;
 }
 
+/** Last change = max of frontmatter `updated` and the last commit `updatedAt`, within 14 days. */
+export function isRecentlyChanged(item: Pick<BoardItem, "updated" | "updatedAt">, now: number): boolean {
+  const touched = Math.max(
+    Date.parse(`${item.updated}T00:00:00.000Z`) || 0,
+    Date.parse(item.updatedAt) || 0,
+  );
+  if (touched === 0) return false;
+  return isWithinDoneWindow(new Date(touched).toISOString().slice(0, 10), now);
+}
+
 export function visibleColumnItems(
   items: readonly BoardItem[],
   status: string,
   doneStatuses: readonly string[],
   priorities: readonly string[],
-  showAllDone: boolean,
+  showAll: boolean,
   now: number,
-): { visible: BoardItem[]; hidden: number } {
+): { visible: BoardItem[]; hidden: number; closed: boolean } {
   const matching = items
     .filter((item) => item.status === status)
     .sort((left, right) => compareBoardItems(left, right, priorities));
-  if (!doneStatuses.includes(status) || showAllDone) {
-    return { visible: matching, hidden: 0 };
+  const closed = isClosedStatus(status, doneStatuses);
+  if (!closed || showAll) {
+    return { visible: matching, hidden: 0, closed };
   }
-  const visible = matching.filter((item) => isWithinDoneWindow(item.updated, now));
-  return { visible, hidden: matching.length - visible.length };
+  const visible = matching.filter((item) => isRecentlyChanged(item, now));
+  return { visible, hidden: matching.length - visible.length, closed };
+}
+
+const PRIORITY_MEANINGS: Record<string, string> = {
+  p0: "urgent",
+  p1: "high",
+  p2: "normal",
+  p3: "low",
+};
+
+/** "p0 · urgent" for the default scale; unknown priorities stay as-is. */
+export function priorityLabel(priority: string): string {
+  const meaning = PRIORITY_MEANINGS[priority];
+  return meaning === undefined ? priority : `${priority} · ${meaning}`;
 }
 
 export function priorityVariant(priority: string): "destructive" | "default" | "outline" {
@@ -150,6 +254,42 @@ export function phaseProgress(
   if (phases === undefined || phases.length === 0) return null;
   const done = phases.filter((phase) => doneStatuses.includes(phase.status)).length;
   return { done, total: phases.length };
+}
+
+export function readProposals(value: unknown): Proposal[] {
+  if (!Array.isArray(value)) return [];
+  const proposals: Proposal[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.branch !== "string" || typeof entry.initiativeId !== "string") continue;
+    if (!Array.isArray(entry.fields)) continue;
+    const fields: ProposalField[] = [];
+    for (const field of entry.fields) {
+      if (!isRecord(field) || typeof field.field !== "string" || typeof field.value !== "string") continue;
+      fields.push({ field: field.field, value: field.value });
+    }
+    if (fields.length === 0) continue;
+    const proposal: Proposal = { branch: entry.branch, initiativeId: entry.initiativeId, fields };
+    if (
+      isRecord(entry.pr) &&
+      typeof entry.pr.number === "number" &&
+      Number.isInteger(entry.pr.number) &&
+      entry.pr.number > 0 &&
+      typeof entry.pr.url === "string" &&
+      entry.pr.url.startsWith("https://")
+    ) {
+      proposal.pr = { number: entry.pr.number, url: entry.pr.url };
+    }
+    proposals.push(proposal);
+  }
+  return proposals;
+}
+
+export function proposalsFor(proposals: readonly Proposal[], id: string): Proposal[] {
+  return proposals.filter((proposal) => proposal.initiativeId === id);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function defaultBranchName(refs: readonly RefInfo[]): string | null {

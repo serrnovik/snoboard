@@ -56,6 +56,31 @@ secretFiles:
   SNOBOARD_GITHUB_CLIENT_SECRET_FILE: github-client-secret
   SNOBOARD_GITHUB_TOKEN_FILE: github-token
 
+# Several repositories on one board (docs/configuration.md, "Several repositories").
+# Empty keeps the single-repo SNOBOARD_REPO_URL settings. When set, it is rendered into a
+# ConfigMap, mounted at reposConfigMountPath, and SNOBOARD_REPOS_FILE points at it; the
+# single-repo repository and edit variables are then ignored. Secrets stay file paths:
+# mount them with extraSecretMounts and reference those paths here.
+reposConfig: {}
+# repos:
+#   - id: acme
+#     name: Acme platform
+#     url: "git@github.com:example/acme.git"
+#     sshKeyFile: /var/run/secrets/acme/ssh-key
+#     edit:
+#       modes: [pr]
+#       botTokenFile: /var/run/secrets/acme/bot-token
+
+# Directory where the repos file appears (as repos.yaml).
+reposConfigMountPath: /etc/snoboard
+
+# Extra Secrets mounted read-only, e.g. one per repository for deploy keys and bot tokens.
+# Each entry: name (volume name), secretName, mountPath, optional items (key/path list).
+extraSecretMounts: []
+# - name: acme-secrets
+#   secretName: snoboard-acme
+#   mountPath: /var/run/secrets/acme
+
 # requests: 100m CPU / 128Mi memory. memory limit: 256Mi.
 resources:
   requests:

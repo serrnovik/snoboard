@@ -1,0 +1,22 @@
+# Example multi-repo config for SNOBOARD_REPOS_FILE.
+# Secrets are file paths only. A public https URL can omit both key files.
+repos:
+  - id: acme
+    name: Acme platform
+    url: "git@github.com:example/acme.git"
+    sshKeyFile: /secrets/acme-key
+    configPath: .snoboard.yml
+    edit:
+      modes: [pr]
+      baseBranch: main
+      directBranch: board-edits
+      botTokenFile: /secrets/acme-bot
+    issues:
+      github: { repo: example/acme }
+      vikunja: { baseUrl: "https://tasks.example.com", tokenFile: /secrets/vikunja }
+  - id: demo
+    name: Public demo
+    url: "https://github.com/example/demo.git"
+    edit:
+      modes: [direct]
+      directBranch: main

@@ -107,7 +107,7 @@ describe("graph refresh", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.endsWith("/api/refresh") && init?.method === "POST") {
+        if (url.endsWith("/refresh") && init?.method === "POST") {
           return jsonResponse({ accepted: true }, 202);
         }
         boardCalls += 1;

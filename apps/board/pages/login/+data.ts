@@ -1,10 +1,8 @@
-import { getPublicAuthView } from "../../server/auth/env.js";
+import { getPublicAuthView, type PublicAuthView } from "../../server/auth/env.js";
+import { boardVersion } from "../../server/version.js";
 
-export type LoginPageData = {
-  password: boolean;
-  github: boolean;
-};
+export type LoginPageData = PublicAuthView & { version?: string };
 
 export function data(): LoginPageData {
-  return getPublicAuthView();
+  return { ...getPublicAuthView(), version: boardVersion() };
 }

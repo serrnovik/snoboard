@@ -1,0 +1,11 @@
+{{- if .Values.reposConfig }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snoboard.fullname" . }}-repos
+  labels:
+    {{- include "snoboard.labels" . | nindent 4 }}
+data:
+  repos.yaml: |
+    {{- toYaml .Values.reposConfig | nindent 4 }}
+{{- end }}

@@ -1,24 +1,42 @@
-import { useEffect, useState } from "react";
-import { VERSION } from "snoboard/browser";
+import { ChevronLeft, ChevronRight, GripVertical } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { type BoardItem, type Edit } from "snoboard/browser";
+import { AppVersion } from "@/components/app-version";
+import { PageActionsPortal } from "@/components/page-actions";
 import { Button } from "@/components/ui/button";
-import { Kanban, KanbanBoard, KanbanColumn, KanbanItem } from "@/components/ui/kanban";
+import { Kanban, KanbanBoard, KanbanColumn, KanbanItem, KanbanItemHandle, KanbanOverlay, useKanbanDrop } from "@/components/ui/kanban";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BasketPanel } from "@/features/basket/BasketPanel";
+import { useEditConfig } from "@/features/basket/edit-config";
+import { NewInitiativeDialog } from "@/features/basket/NewInitiativeDialog";
+import { pendingEditsFor, useBasket } from "@/features/basket/store";
+import { useRepoId } from "@/features/repo/context";
 import { BoardCard } from "@/features/board/Card";
 import { DetailsDrawer } from "@/features/details/DetailsSheet";
 import { setOpenId } from "@/features/details/open";
 import { Filters } from "@/features/board/Filters";
+import { useFoldedColumns } from "@/features/board/folded";
 import { LegacyList } from "@/features/board/LegacyList";
 import {
+  compareBoardItems,
   defaultBranchName,
   matchesFilters,
   parseBoardQuery,
+  proposalsFor,
+  readProposals,
   serializeBoardQuery,
   uniqueSorted,
   visibleColumnItems,
   formatRelativeTime,
   type BoardPayload,
   type BoardQuery,
+  type Proposal,
+  DEFAULT_STALE_AFTER_DAYS,
+  isClosedStatus,
+  isStale,
+  showsAllClosed,
+  toggleShowAllClosed,
 } from "@/features/board/model";
 import { rateLimitNote, useBoardResource } from "@/features/board/sync";
 
@@ -48,6 +66,8 @@ export function Board({
     nowMs,
     refresh,
   } = useBoardResource({ pollIntervalMs, now, refreshPollMs, refreshTimeoutMs });
+  const editConfig = useEditConfig();
+  const editing = editConfig.ready && editConfig.enabled;
 
   useEffect(() => {
     setQueryText(window.location.search);
@@ -90,10 +110,12 @@ export function Board({
             payload={payload}
             query={parseBoardQuery(queryText)}
             nowMs={nowMs}
+            editing={editing}
+            canSubmit={editConfig.canSubmit}
             onQueryChange={updateQuery}
           />
         ) : null}
-        <footer className="mt-auto px-4 pb-4 text-sm text-muted-foreground">Snoboard {VERSION}</footer>
+        <footer className="mt-auto px-4 pb-4 text-sm text-muted-foreground"><AppVersion /></footer>
         <DetailsDrawer />
       </main>
     </TooltipProvider>
@@ -112,14 +134,32 @@ function BoardBody({
   payload,
   query,
   nowMs,
+  editing,
+  canSubmit,
   onQueryChange,
 }: {
   payload: BoardPayload;
   query: BoardQuery;
   nowMs: number;
+  editing: boolean;
+  canSubmit: boolean;
   onQueryChange: (next: BoardQuery) => void;
 }) {
-  const filtered = payload.items.filter((item) => matchesFilters(item, query));
+  const repoId = useRepoId();
+  const basket = useBasket(repoId);
+  const { folded, toggle: toggleFolded } = useFoldedColumns(repoId);
+  const staleAfterDays = payload.config.staleAfterDays ?? DEFAULT_STALE_AFTER_DAYS;
+  const staleIds = new Set(
+    payload.items
+      .filter((item) => isStale(item, payload.config.doneStatuses, staleAfterDays, nowMs))
+      .map((item) => item.id),
+  );
+  const pending = editing ? basket.edits : [];
+  const matching = payload.items.filter((item) => matchesFilters(item, query));
+  const filtered = (query.hideStale ? matching.filter((item) => !staleIds.has(item.id)) : matching).map((item) =>
+    withPendingStatus(item, pending),
+  );
+  const staleCount = matching.length - matching.filter((item) => !staleIds.has(item.id)).length;
   const projects = uniqueSorted(payload.items.map((item) => item.project));
   const labels = uniqueSorted(payload.items.flatMap((item) => item.labels ?? []));
   const defaultBranch = defaultBranchName(payload.refs);
@@ -130,18 +170,41 @@ function BoardBody({
       status,
       payload.config.doneStatuses,
       payload.config.priorities,
-      query.showAllDone,
+      showsAllClosed(query.showAllClosed, status),
       nowMs,
     ),
   }));
   const columns = Object.fromEntries(byStatus.map(({ status, column }) => [status, column.visible]));
-  const showAllHref = `${window.location.pathname}${serializeBoardQuery(window.location.search, {
+  const closedStatuses = payload.config.statuses.filter((status) => isClosedStatus(status, payload.config.doneStatuses));
+  const toggledQuery = (status: string): BoardQuery => ({
     ...query,
-    showAllDone: true,
-  })}`;
+    showAllClosed: toggleShowAllClosed(query.showAllClosed, status, closedStatuses),
+  });
+  const toggleHref = (status: string) =>
+    `${window.location.pathname}${serializeBoardQuery(window.location.search, toggledQuery(status))}`;
+  const snapshotStatus = new Map(payload.items.map((item) => [item.id, item.status]));
+  const titleById = new Map(payload.items.map((item) => [item.id, item.title]));
+  const byId = new Map(filtered.map((item) => [item.id, item]));
+  const proposals = readProposals(payload.proposals);
 
   return (
     <>
+      <BasketPanel enabled={editing} canSubmit={canSubmit} repoId={repoId} titles={titleById} />
+      {editing ? (
+        <PageActionsPortal>
+          <NewInitiativeDialog
+            projects={projects}
+            initiatives={payload.items.map((item) => ({
+              id: item.id,
+              title: item.title,
+              done: payload.config.doneStatuses.includes(item.status),
+            }))}
+            statuses={payload.config.statuses}
+            priorities={payload.config.priorities}
+            defaultProject={query.project}
+          />
+        </PageActionsPortal>
+      ) : null}
       {payload.status.lastError !== null ? (
         <p role="alert" className="mx-4 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
           {payload.status.lastError}
@@ -153,6 +216,8 @@ function BoardBody({
           projects={projects}
           labels={labels}
           priorities={payload.config.priorities}
+          staleCount={staleCount}
+          staleAfterDays={staleAfterDays}
           onChange={onQueryChange}
         />
       </div>
@@ -161,11 +226,54 @@ function BoardBody({
       ) : filtered.length === 0 ? (
         <p className="px-4 text-sm text-muted-foreground">No initiatives match these filters.</p>
       ) : (
-        <div data-testid="board-scroller" className="w-full min-w-0 overflow-x-scroll pb-2">
-          <Kanban value={columns} getItemValue={(item) => item.id} sensors={[]}>
+        <div data-testid="board-scroller" className="w-full min-w-0 overflow-x-scroll bg-background pb-2">
+          <Kanban
+            value={columns}
+            getItemValue={(item) => item.id}
+            {...(editing
+              ? {
+                  onValueChange: (next: Record<string, BoardItem[]>) => {
+                    // Kanban calls this from onDragEnd, after the pointer is released.
+                    basket.moveStatuses(next, (id) => snapshotStatus.get(id));
+                  },
+                }
+              : { sensors: [] })}
+          >
             <KanbanBoard className="h-auto! w-max! min-w-full items-start px-4">
               {byStatus.map(({ status, column }) => {
                 const heading = statusHeading(status);
+                const total = column.visible.length + column.hidden;
+                const isFolded = folded.has(status);
+                const foldButton = (
+                  <button
+                    type="button"
+                    aria-expanded={!isFolded}
+                    aria-label={`${isFolded ? "Unfold" : "Fold"} ${heading}`}
+                    data-testid={`fold-${status}`}
+                    onClick={() => toggleFolded(status)}
+                    className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    {isFolded ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}
+                  </button>
+                );
+                if (isFolded) {
+                  return (
+                    <KanbanColumn
+                      key={status}
+                      value={status}
+                      data-testid={`column-${status}`}
+                      data-folded="true"
+                      aria-label={heading}
+                      className="h-auto! min-h-48 w-10! shrink-0! items-center px-1! bg-muted dark:bg-muted"
+                    >
+                      {foldButton}
+                      <h2 className="text-sm font-medium [writing-mode:vertical-rl]">{heading}</h2>
+                      <span className="text-xs text-muted-foreground" data-testid={`count-${status}`}>
+                        {total}
+                      </span>
+                    </KanbanColumn>
+                  );
+                }
                 return (
                   <KanbanColumn
                     key={status}
@@ -175,39 +283,44 @@ function BoardBody({
                     className="h-auto! w-[272px]! shrink-0! bg-muted dark:bg-muted"
                   >
                     <div className="flex items-center justify-between gap-2 px-1">
-                      <h2 className="text-sm font-medium">{heading}</h2>
-                      <span className="text-xs text-muted-foreground">{column.visible.length}</span>
+                      <div className="flex min-w-0 items-center gap-1">
+                        {foldButton}
+                        <h2 className="text-sm font-medium">{heading}</h2>
+                      </div>
+                      <span className="text-xs text-muted-foreground" data-testid={`count-${status}`}>
+                        {column.hidden > 0 ? `${total} · ${column.visible.length} shown` : total}
+                      </span>
                     </div>
-                    {column.hidden > 0 ? (
+                    {column.closed && (column.hidden > 0 || showsAllClosed(query.showAllClosed, status)) ? (
                       <a
-                        href={showAllHref}
+                        href={toggleHref(status)}
                         className="px-1 text-xs underline"
                         onClick={(event) => {
                           event.preventDefault();
-                          onQueryChange({ ...query, showAllDone: true });
+                          onQueryChange(toggledQuery(status));
                         }}
                       >
-                        Show all
+                        {column.hidden > 0 ? `Show all (${total})` : "Show recent"}
                       </a>
                     ) : null}
-                    {column.visible.length === 0 ? (
-                      <p className="px-1 text-xs text-muted-foreground">No initiatives</p>
-                    ) : (
-                      column.visible.map((item) => (
-                        <KanbanItem key={item.id} value={item.id}>
-                          <BoardCard
-                            item={item}
-                            doneStatuses={payload.config.doneStatuses}
-                            defaultBranch={defaultBranch}
-                            onOpen={setOpenId}
-                          />
-                        </KanbanItem>
-                      ))
-                    )}
+                    <ColumnCards
+                      status={status}
+                      items={column.visible}
+                      priorities={payload.config.priorities}
+                      byId={byId}
+                      editing={editing}
+                      doneStatuses={payload.config.doneStatuses}
+                      defaultBranch={defaultBranch}
+                      staleIds={staleIds}
+                      pending={pending}
+                      proposals={proposals}
+                      titles={titleById}
+                    />
                   </KanbanColumn>
                 );
               })}
             </KanbanBoard>
+            <DragGhost items={filtered} />
           </Kanban>
         </div>
       )}
@@ -220,9 +333,122 @@ function BoardBody({
   );
 }
 
+function ColumnCards({
+  status,
+  items,
+  priorities,
+  byId,
+  editing,
+  doneStatuses,
+  defaultBranch,
+  staleIds,
+  pending,
+  proposals,
+  titles,
+}: {
+  status: string;
+  items: BoardItem[];
+  priorities: readonly string[];
+  byId: ReadonlyMap<string, BoardItem>;
+  editing: boolean;
+  doneStatuses: readonly string[];
+  defaultBranch: string | null;
+  staleIds: ReadonlySet<string>;
+  pending: readonly Edit[];
+  proposals: readonly Proposal[];
+  titles: ReadonlyMap<string, string>;
+}) {
+  const drop = useKanbanDrop();
+  const showSlot = drop.dropColumnId === status && drop.activeColumnId !== null && drop.activeColumnId !== status;
+  const dragged = showSlot && drop.activeId != null ? byId.get(String(drop.activeId)) : undefined;
+  const slotAt = dragged === undefined ? -1 : landingIndex(items, dragged, priorities);
+
+  if (items.length === 0 && slotAt < 0) {
+    return <p className="px-1 text-xs text-muted-foreground">No initiatives</p>;
+  }
+
+  const rows: ReactNode[] = [];
+  items.forEach((item, index) => {
+    if (index === slotAt) rows.push(<DropPlaceholder key="drop-placeholder" />);
+    rows.push(
+      <KanbanItem key={item.id} value={item.id}>
+        {editing ? (
+          <div className="flex items-start gap-1">
+            <KanbanItemHandle
+              aria-label={`Drag ${item.id}`}
+              data-testid={`drag-${item.id}`}
+              className="mt-3 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground"
+            >
+              <GripVertical aria-hidden="true" />
+            </KanbanItemHandle>
+            <div className="min-w-0 flex-1">
+              <BoardCard
+                item={item}
+                doneStatuses={doneStatuses}
+                defaultBranch={defaultBranch}
+                stale={staleIds.has(item.id)}
+                pending={pendingEditsFor(pending, item.id)}
+                proposed={proposalsFor(proposals, item.id)}
+                titles={titles}
+                onOpen={setOpenId}
+              />
+            </div>
+          </div>
+        ) : (
+          <BoardCard
+            item={item}
+            doneStatuses={doneStatuses}
+            defaultBranch={defaultBranch}
+            stale={staleIds.has(item.id)}
+            proposed={proposalsFor(proposals, item.id)}
+            titles={titles}
+            onOpen={setOpenId}
+          />
+        )}
+      </KanbanItem>,
+    );
+  });
+  if (slotAt >= items.length) rows.push(<DropPlaceholder key="drop-placeholder" />);
+  return <>{rows}</>;
+}
+
+function DropPlaceholder() {
+  return (
+    <div
+      data-testid="drop-placeholder"
+      aria-hidden="true"
+      className="pointer-events-none h-12 shrink-0 rounded-md border-2 border-dashed border-primary bg-primary/15"
+    />
+  );
+}
+
+function DragGhost({ items }: { items: readonly BoardItem[] }) {
+  return (
+    <KanbanOverlay>
+      {({ value, variant }) => {
+        if (variant !== "item") return null;
+        const item = items.find((entry) => entry.id === value);
+        if (item === undefined) return null;
+        return (
+          <div className="w-[240px] rounded-lg bg-card p-3 shadow-lg ring-2 ring-primary">
+            <p className="font-mono text-xs text-muted-foreground">{item.id}</p>
+            <p className="text-sm font-medium">{item.title}</p>
+          </div>
+        );
+      }}
+    </KanbanOverlay>
+  );
+}
+
+function landingIndex(items: readonly BoardItem[], dragged: BoardItem, priorities: readonly string[]): number {
+  const ranked = [...items, dragged].sort((left, right) => compareBoardItems(left, right, priorities));
+  const index = ranked.findIndex((entry) => entry.id === dragged.id);
+  return index === -1 ? items.length : index;
+}
+
 function BoardSkeleton() {
   return (
-    <div data-testid="board-skeleton" aria-busy="true" aria-label="Loading board" className="flex w-full min-w-0 gap-4 overflow-x-scroll px-4">
+    <div data-testid="board-skeleton" aria-busy="true" aria-label="Loading board" className="flex w-full min-w-0 gap-4 overflow-x-scroll bg-background px-4">
       {Array.from({ length: 4 }, (_, index) => (
         <div key={index} className="flex w-[272px] shrink-0 flex-col gap-3">
           <Skeleton className="h-6 w-24" />
@@ -232,6 +458,12 @@ function BoardSkeleton() {
       ))}
     </div>
   );
+}
+
+function withPendingStatus(item: BoardItem, edits: readonly Edit[]): BoardItem {
+  const pending = edits.find((edit) => edit.kind === "setStatus" && edit.id === item.id);
+  if (pending === undefined || pending.kind !== "setStatus" || pending.to === item.status) return item;
+  return { ...item, status: pending.to };
 }
 
 function statusHeading(status: string): string {

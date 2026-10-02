@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes, ReactNode } from "react";
+import type { AnchorHTMLAttributes, ImgHTMLAttributes, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 
@@ -41,7 +41,26 @@ function MarkdownLink({ node: _node, href, children, ...props }: MarkdownAnchorP
   );
 }
 
-export function SummaryMarkdown({ markdown }: { markdown: string }) {
+type MarkdownImageProps = ImgHTMLAttributes<HTMLImageElement> & { node?: unknown };
+
+function MarkdownImage({ node: _node, src, alt, title }: MarkdownImageProps) {
+  if (typeof src !== "string" || src.length === 0) {
+    return <span className="text-muted-foreground">[{alt || "image"}]</span>;
+  }
+  return <img src={src} alt={alt ?? ""} title={title} loading="lazy" referrerPolicy="no-referrer" className="max-w-full" />;
+}
+
+/**
+ * Renders initiative markdown. Images show only when `resolveImage` maps their
+ * src (relative `assets/...` paths) to a URL; remote images are always blocked.
+ */
+export function SummaryMarkdown({
+  markdown,
+  resolveImage,
+}: {
+  markdown: string;
+  resolveImage?: (src: string) => string;
+}) {
   const source = stripRawHtml(markdown).trim();
   if (source.length === 0) {
     return <p className="text-sm text-muted-foreground">No summary.</p>;
@@ -50,8 +69,8 @@ export function SummaryMarkdown({ markdown }: { markdown: string }) {
     <div className="space-y-2 text-sm leading-6 [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown
         rehypePlugins={[rehypeSanitize]}
-        urlTransform={safeUrl}
-        components={{ a: MarkdownLink }}
+        urlTransform={(url, key) => (key === "src" ? (resolveImage?.(url) ?? "") : safeUrl(url))}
+        components={{ a: MarkdownLink, img: MarkdownImage }}
       >
         {source}
       </ReactMarkdown>

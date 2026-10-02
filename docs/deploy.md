@@ -8,7 +8,8 @@ The image includes `git` and `openssh-client`, runs as uid/gid 10001, and does n
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `SNOBOARD_REPO_URL` | yes, for a ready board | Git URL to clone. `https://`, `ssh://`, `git@`, or `file://` |
+| `SNOBOARD_REPO_URL` | yes, for a ready board (single repo) | Git URL to clone. `https://`, `ssh://`, `git@`, or `file://` |
+| `SNOBOARD_REPOS_FILE` | no | YAML file with several repositories. Overrides the single-repo variables. See [configuration.md](configuration.md#several-repositories) |
 | `SNOBOARD_DATA_DIR` | no | Clone directory. Image default `/tmp/snoboard`. The chart sets `/var/lib/snoboard` |
 | `SNOBOARD_REFRESH_SECONDS` | no | Seconds between fetches. Default 120 |
 | `SNOBOARD_SSH_KEY_FILE` | for SSH remotes | Path to a read-only deploy key |
@@ -19,7 +20,7 @@ The image includes `git` and `openssh-client`, runs as uid/gid 10001, and does n
 | `SNOBOARD_PUBLIC_URL` | for sign-in | Public origin, scheme included, no path |
 | `SNOBOARD_SESSION_SECRET_FILE` | for `password` and `github` | Path to a secret of at least 32 bytes |
 | `SNOBOARD_PASSWORD_HASH_FILE` | for `password` | Path to the argon2id hash file |
-| `SNOBOARD_GITHUB_CLIENT_ID` | for `github` | OAuth app client id |
+| `SNOBOARD_GITHUB_CLIENT_ID` or `SNOBOARD_GITHUB_CLIENT_ID_FILE` | for `github` | OAuth app client id (value, or a file holding it) |
 | `SNOBOARD_GITHUB_CLIENT_SECRET_FILE` | for `github` | Path to the OAuth client secret |
 | `SNOBOARD_ALLOWED_GITHUB_LOGINS` | no | Comma-separated GitHub logins |
 | `SNOBOARD_ALLOWED_GITHUB_ORGS` | no | Comma-separated GitHub organizations |
@@ -114,3 +115,52 @@ helm template snoboard deploy/helm/snoboard
 helm template snoboard deploy/helm/snoboard \
   -f deploy/helm/snoboard/values-existing-secret.example.yaml
 ```
+
+### Several repositories
+
+Set `reposConfig` to the repos file contents. The chart renders it into a ConfigMap, mounts it at
+`reposConfigMountPath` (`/etc/snoboard/repos.yaml`), and sets `SNOBOARD_REPOS_FILE`. Leave `reposConfig` empty and
+the chart renders exactly as before. Mount per-repository keys and bot tokens with `extraSecretMounts` and refer to
+those paths in the file. The shared `existingSecret` still carries the session secret, password hash and OAuth
+client secret.
+
+```sh
+kubectl create secret generic snoboard-acme \
+  --from-file=ssh-key=./acme-deploy-key \
+  --from-file=bot-token=./acme-bot-token
+```
+
+Two repositories, from `deploy/helm/snoboard/values-repos.example.yaml`:
+
+```yaml
+reposConfig:
+  repos:
+    - id: acme
+      name: Acme platform
+      url: "git@github.com:example/acme.git"
+      sshKeyFile: /var/run/secrets/acme/ssh-key
+      edit:
+        modes: [direct, pr]
+        directBranch: main
+        botTokenFile: /var/run/secrets/acme/bot-token
+    - id: widgets
+      name: Widgets
+      url: "https://github.com/example/widgets.git"
+      edit:
+        modes: [pr]
+        githubWriteScope: public_repo
+extraSecretMounts:
+  - name: acme-secrets
+    secretName: snoboard-acme
+    mountPath: /var/run/secrets/acme
+```
+
+```sh
+helm template snoboard deploy/helm/snoboard \
+  -f deploy/helm/snoboard/values-existing-secret.example.yaml \
+  -f deploy/helm/snoboard/values-repos.example.yaml
+```
+
+The board is then at `/r/acme/` and `/r/widgets/`; `/` opens the first repository. A change to `reposConfig` rolls
+the pod (the template carries a checksum of it). Single-repo `env` values such as `SNOBOARD_REPO_URL` are ignored
+while `reposConfig` is set; remove them to silence the startup warning.

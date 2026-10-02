@@ -13,7 +13,7 @@ vi.mock("vike-react/usePageContext", () => ({
 }));
 
 vi.mock("vike-react/useData", () => ({
-  useData: () => ({ password: true, github: false }),
+  useData: () => ({ password: true, github: false, version: "0.1.16.1" }),
 }));
 
 afterEach(() => {
@@ -23,6 +23,20 @@ afterEach(() => {
 });
 
 describe("app chrome", () => {
+  it("keeps legacy nav links while the legacy route is still choosing a repository", () => {
+    pathname = "/graph";
+    render(<AppChrome>content</AppChrome>);
+    expect(screen.getByRole("link", { name: "Board" }).getAttribute("href")).toBe("/");
+    expect(screen.getByRole("link", { name: "Dependencies" }).getAttribute("href")).toBe("/graph");
+  });
+
+  it("links nav inside the repository in the URL", () => {
+    pathname = "/r/widgets/";
+    render(<AppChrome>content</AppChrome>);
+    expect(screen.getByRole("link", { name: "Board" }).getAttribute("href")).toBe("/r/widgets/");
+    expect(screen.getByRole("link", { name: "Dependencies" }).getAttribute("href")).toBe("/r/widgets/graph");
+  });
+
   it("keeps nav links left and page actions, theme, and log out on the right", async () => {
     pathname = "/graph";
     render(
@@ -89,10 +103,10 @@ describe("app chrome", () => {
     expect(children[2]?.className.split(/\s+/)).toEqual(expect.arrayContaining(["flex", "min-h-12"]));
     expect(children[2]?.textContent).toContain("Log out");
 
-    const themeButton = screen.getByRole("button", { name: "Switch to dark mode" });
-    expect(themeButton.className.split(/\s+/)).toContain("sm:hidden");
-    const wideTheme = screen.getByText("Light").parentElement;
-    expect(wideTheme?.className.split(/\s+/)).toEqual(expect.arrayContaining(["hidden", "sm:flex"]));
+    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    expect(theme.className.split(/\s+/)).toContain("bg-background");
+    const lightLabel = screen.getByRole("radio", { name: "Light" }).querySelector("span");
+    expect(lightLabel?.className.split(/\s+/)).toEqual(expect.arrayContaining(["hidden", "sm:inline"]));
 
     const logout = screen.getByRole("button", { name: "Log out" });
     expect(logout.querySelector("svg")).toBeTruthy();
@@ -109,13 +123,25 @@ describe("app chrome", () => {
       </AppChrome>,
     );
 
-    expect(screen.getByRole("link", { name: "Snoboard" })).toBeTruthy();
-    expect(screen.getByRole("switch", { name: "Dark mode" })).toBeTruthy();
-    expect(screen.getAllByRole("switch", { name: "Dark mode" })).toHaveLength(1);
+    const home = screen.getByRole("link", { name: "Snoboard" });
+    expect(home).toBeTruthy();
+    const logo = home.querySelector("img");
+    expect(logo?.parentElement?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["rounded-md", "bg-white", "p-0.5"]),
+    );
+    expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeTruthy();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(screen.queryByRole("switch", { name: "Dark mode" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Snoboard" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Board" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Dependencies" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+  });
+
+  it("shows the deployed version from page data in the footer", () => {
+    pathname = "/login";
+    render(<LoginPage />);
+    expect(screen.getByTestId("app-version").textContent).toBe("Snoboard 0.1.16.1");
   });
 });

@@ -7,7 +7,7 @@ import path from "node:path";
 export interface TmpRepoCommit {
   /** Branch to commit on. Defaults to the repository default branch. */
   branch?: string;
-  files: Readonly<Record<string, string>>;
+  files: Readonly<Record<string, string | Uint8Array>>;
   message?: string;
   /** Author and committer date passed to git (ISO-8601). */
   date?: string;
@@ -165,7 +165,7 @@ async function commitFiles(
     const parts = relativeParts(relativePath);
     const fullPath = path.join(repoDir, ...parts);
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content, "utf8");
+    await (typeof content === "string" ? writeFile(fullPath, content, "utf8") : writeFile(fullPath, content));
     paths.push(parts.join("/"));
   }
   if (paths.length === 0) {

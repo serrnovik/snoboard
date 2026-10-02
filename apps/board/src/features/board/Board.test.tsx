@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import type { BoardItem, LegacyItem, RefInfo } from "snoboard/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetBasketStore } from "@/features/basket/store";
 import { Board } from "@/features/board/Board";
 import type { BoardPayload } from "@/features/board/model";
 import { browserLocation } from "@/features/board/sync";
@@ -74,10 +75,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 function mockBoard(body: BoardPayload | { error: string }, status = 200) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/api/refresh") && init?.method === "POST") {
+    if (url.endsWith("/refresh") && init?.method === "POST") {
       return jsonResponse({ accepted: true }, 202);
     }
-    if (url.endsWith("/api/board")) return jsonResponse(body, status);
+    if (url.endsWith("/board")) return jsonResponse(body, status);
     return jsonResponse({ error: "not found" }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -104,6 +105,8 @@ afterEach(() => {
   vi.useRealTimers();
   window.history.replaceState(null, "", "/");
   document.documentElement.classList.remove("dark");
+  localStorage.clear();
+  resetBasketStore();
 });
 
 describe("board view", () => {
@@ -229,7 +232,14 @@ describe("board view", () => {
       payload({
         items: [
           item({ id: "acme-001", title: "Recent done", status: "done", priority: "p1", updated: "2026-09-20" }),
-          item({ id: "acme-008", title: "Old done", status: "done", priority: "p0", updated: "2026-08-01" }),
+          item({
+            id: "acme-008",
+            title: "Old done",
+            status: "done",
+            priority: "p0",
+            updated: "2026-08-01",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          }),
         ],
       }),
     );
@@ -237,9 +247,96 @@ describe("board view", () => {
     render(<Board pollIntervalMs={0} now={NOW} />);
     expect(await screen.findByTestId("card-acme-001")).toBeTruthy();
     expect(screen.queryByTestId("card-acme-008")).toBeNull();
-    await user.click(screen.getByRole("link", { name: "Show all" }));
-    expect(window.location.search).toContain("done=all");
+    expect(screen.getByTestId("count-done").textContent).toBe("2 · 1 shown");
+    await user.click(screen.getByRole("link", { name: "Show all (2)" }));
+    expect(window.location.search).toContain("closed=all");
     expect(cardIds("done")).toEqual(["acme-008", "acme-001"]);
+    expect(screen.getByTestId("count-done").textContent).toBe("2");
+  });
+
+  it("still honours the legacy done=all URL", async () => {
+    window.history.replaceState(null, "", "/?done=all");
+    mockBoard(
+      payload({
+        items: [
+          item({ id: "acme-008", title: "Old done", status: "done", priority: "p0", updated: "2026-08-01", updatedAt: "2026-08-01T00:00:00.000Z" }),
+        ],
+      }),
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-008")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Show recent" })).toBeTruthy();
+  });
+
+  it("limits parked and dropped columns to recent changes with per-column toggles", async () => {
+    const user = userEvent.setup();
+    const old = { updated: "2026-07-01", updatedAt: "2026-07-01T00:00:00.000Z" };
+    mockBoard(
+      payload({
+        config: {
+          statuses: ["planned", "parked", "dropped", "done"],
+          priorities: ["p0", "p1", "p2", "p3"],
+          doneStatuses: ["done"],
+        },
+        items: [
+          item({ id: "acme-001", title: "Old plan", status: "planned", priority: "p1", ...old }),
+          // Frontmatter is old but the last commit is recent: counts as recent.
+          item({ id: "acme-002", title: "Recent park", status: "parked", priority: "p1", updated: "2026-07-01", updatedAt: "2026-09-25T10:00:00.000Z" }),
+          item({ id: "acme-003", title: "Old park", status: "parked", priority: "p1", ...old }),
+          item({ id: "acme-004", title: "Old park 2", status: "parked", priority: "p2", ...old }),
+          item({ id: "acme-005", title: "Old drop", status: "dropped", priority: "p1", ...old }),
+        ],
+      }),
+    );
+
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-002")).toBeTruthy();
+    expect(cardIds("planned")).toEqual(["acme-001"]);
+    expect(cardIds("parked")).toEqual(["acme-002"]);
+    expect(within(screen.getByTestId("column-dropped")).queryAllByTestId(/^card-/)).toEqual([]);
+    expect(screen.getByTestId("count-parked").textContent).toBe("3 · 1 shown");
+    expect(screen.getByTestId("count-dropped").textContent).toBe("1 · 0 shown");
+    expect(screen.getByTestId("count-planned").textContent).toBe("1");
+
+    const parked = screen.getByTestId("column-parked");
+    await user.click(within(parked).getByRole("link", { name: "Show all (3)" }));
+    expect(new URLSearchParams(window.location.search).get("closed")).toBe("parked");
+    expect(cardIds("parked")).toEqual(["acme-002", "acme-003", "acme-004"]);
+    expect(within(screen.getByTestId("column-dropped")).queryAllByTestId(/^card-/)).toEqual([]);
+
+    await user.click(within(parked).getByRole("link", { name: "Show recent" }));
+    expect(new URLSearchParams(window.location.search).get("closed")).toBeNull();
+    expect(cardIds("parked")).toEqual(["acme-002"]);
+  });
+
+  it("folds and unfolds columns, persisted per repo", async () => {
+    const user = userEvent.setup();
+    mockBoard(
+      payload({
+        items: [item({ id: "acme-003", title: "Reports", status: "planned", priority: "p2" })],
+      }),
+    );
+    const first = render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByTestId("card-acme-003")).toBeTruthy();
+    const fold = screen.getByRole("button", { name: "Fold Planned" });
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    await user.click(fold);
+    const unfold = screen.getByRole("button", { name: "Unfold Planned" });
+    expect(unfold.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("column-planned").getAttribute("data-folded")).toBe("true");
+    expect(screen.queryByTestId("card-acme-003")).toBeNull();
+    expect(screen.getByTestId("count-planned").textContent).toBe("1");
+    expect(JSON.parse(localStorage.getItem("snoboard:folded-columns:v1:default") ?? "[]")).toEqual(["planned"]);
+
+    first.unmount();
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    const again = await screen.findByRole("button", { name: "Unfold Planned" });
+    expect(screen.getByRole("button", { name: "Fold Done" }).getAttribute("aria-expanded")).toBe("true");
+    again.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByTestId("card-acme-003")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Fold Planned" }).getAttribute("aria-expanded")).toBe("true");
+    expect(JSON.parse(localStorage.getItem("snoboard:folded-columns:v1:default") ?? "[]")).toEqual([]);
   });
 
   it("shows a collapsed legacy section when the URL has legacy=1", async () => {
@@ -335,7 +432,7 @@ describe("board view", () => {
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/refresh") && init?.method === "POST") {
+      if (url.endsWith("/refresh") && init?.method === "POST") {
         return jsonResponse({ accepted: true }, 202);
       }
       return jsonResponse(
@@ -354,7 +451,7 @@ describe("board view", () => {
     expect(await screen.findByText("Remote fetch failed")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Remote fetch failed");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/refresh",
+      "/api/repos/default/refresh",
       expect.objectContaining({ method: "POST" }),
     );
   });
@@ -364,6 +461,23 @@ describe("board view", () => {
     render(<Board pollIntervalMs={0} now={NOW} />);
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText("snapshot not ready")).toBeTruthy();
+  });
+
+  it("retries soon while the first snapshot is not ready", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (!String(input).endsWith("/board")) return jsonResponse({ error: "not found" }, 404);
+        calls += 1;
+        if (calls === 1) return jsonResponse({ error: "snapshot not ready" }, 503);
+        return jsonResponse(payload({ items: [item({ id: "acme-001", title: "Ready now", status: "planned", priority: "p1" })] }));
+      }),
+    );
+    render(<Board pollIntervalMs={0} now={NOW} />);
+    expect(await screen.findByText("snapshot not ready")).toBeTruthy();
+    expect(await screen.findByTestId("card-acme-001", undefined, { timeout: 5_000 })).toBeTruthy();
+    expect(calls).toBe(2);
   });
 
   it("shows a skeleton while the board request is in flight", () => {
@@ -389,6 +503,9 @@ describe("board view", () => {
     const column = screen.getByTestId("column-planned");
     expect(column.className).toContain("w-[272px]");
     expect(column.className).toContain("shrink-0");
+    expect(column.className).toContain("bg-muted");
+    expect(column.className).not.toContain("bg-zinc");
+    expect(scroller.className).toContain("bg-background");
     const main = scroller.closest("main");
     expect(main?.className).toContain("w-full");
     expect(main?.className).toContain("min-w-0");
@@ -409,8 +526,18 @@ describe("board view", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.endsWith("/api/refresh") && init?.method === "POST") {
+        if (url.endsWith("/refresh") && init?.method === "POST") {
           return jsonResponse({ accepted: true }, 202);
+        }
+        if (url.endsWith("/edit-config")) {
+          return jsonResponse({
+            enabled: false,
+            modes: [],
+            baseBranch: "main",
+            canSubmit: false,
+            needsGithubWrite: false,
+            defaultMode: "pr",
+          });
         }
         boardCalls += 1;
         if (boardCalls === 1) {
@@ -461,12 +588,12 @@ describe("board view", () => {
     render(<Board pollIntervalMs={0} now={NOW} />);
     expect(await screen.findByTestId("card-acme-002")).toBeTruthy();
     const boardCalls = () =>
-      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/api/board")).length;
+      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/board")).length;
     const before = boardCalls();
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/refresh") && init?.method === "POST") {
+      if (url.endsWith("/refresh") && init?.method === "POST") {
         return jsonResponse({ error: "refresh rate limited" }, 429);
       }
       return jsonResponse(payload());
@@ -516,7 +643,7 @@ describe("board view", () => {
     expect(await screen.findByTestId("card-acme-002")).toBeTruthy();
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/refresh") && init?.method === "POST") {
+      if (url.endsWith("/refresh") && init?.method === "POST") {
         return jsonResponse({ accepted: true }, 202);
       }
       throw new Error("network down");
@@ -555,7 +682,7 @@ describe("board view", () => {
     vi.setSystemTime(NOW);
     const fetchMock = mockBoard(
       payload({
-        items: [item({ id: "acme-001", title: "Edge done", status: "done", priority: "p1", updated: "2026-09-15" })],
+        items: [item({ id: "acme-001", title: "Edge done", status: "done", priority: "p1", updated: "2026-09-15", updatedAt: "2026-09-15T00:00:00.000Z" })],
       }),
     );
     render(<Board pollIntervalMs={0} />);
@@ -574,7 +701,7 @@ describe("board view", () => {
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/refresh") && init?.method === "POST") {
+      if (url.endsWith("/refresh") && init?.method === "POST") {
         return jsonResponse({ accepted: true }, 202);
       }
       return jsonResponse(
@@ -585,7 +712,7 @@ describe("board view", () => {
             lastErrorAt: "2026-09-29T14:56:00.000Z",
             refreshing: false,
           },
-          items: [item({ id: "acme-001", title: "Edge done", status: "done", priority: "p1", updated: "2026-09-15" })],
+          items: [item({ id: "acme-001", title: "Edge done", status: "done", priority: "p1", updated: "2026-09-15", updatedAt: "2026-09-15T00:00:00.000Z" })],
         }),
       );
     });

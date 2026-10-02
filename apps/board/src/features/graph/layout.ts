@@ -9,7 +9,7 @@ import {
   type GraphItem,
 } from "snoboard/browser";
 
-export const GRAPH_NODE_WIDTH = 200;
+export const GRAPH_NODE_WIDTH = 260;
 export const GRAPH_NODE_HEIGHT = 88;
 
 const RANK_DIRECTION = "LR";
@@ -37,6 +37,10 @@ export type LayoutOptions = {
   includePhases: boolean;
   hideDone: boolean;
   doneStatuses: readonly string[];
+  /** Initiative ids that pass the page filters; undefined shows all. */
+  visibleInitiatives?: ReadonlySet<string>;
+  /** Drop nodes without a visible dependency edge. */
+  linkedOnly?: boolean;
 };
 
 export type GraphNodeData = {
@@ -68,6 +72,8 @@ export type PositionedEdge = {
 export type LayoutResult = {
   nodes: PositionedNode[];
   edges: PositionedEdge[];
+  /** Initiatives left out by the filters. */
+  hidden: number;
 };
 
 export function initiativeIdFromNodeId(nodeId: string): string {
@@ -81,13 +87,21 @@ export function layoutGraph(items: readonly LayoutItem[], options: LayoutOptions
   const doneStatuses = new Set(options.doneStatuses);
   const titles = titleById(items);
   const blockedIds = blockedNodeIds(graph);
+  // "Linked" is judged on the whole graph so hiding one endpoint never hides its neighbours.
+  const linked = new Set(
+    graph.edges.filter((edge) => edge.from !== edge.to).flatMap((edge) => [edge.from, edge.to]),
+  );
   const visibleNodes = [...graph.nodes.values()].filter((node) => {
-    if (!options.hideDone) return true;
-    return !doneStatuses.has(node.status);
+    if (options.hideDone && doneStatuses.has(node.status)) return false;
+    if (options.linkedOnly === true && !linked.has(node.id)) return false;
+    const allowed = options.visibleInitiatives;
+    return allowed === undefined || allowed.has(initiativeIdFromNodeId(node.id));
   });
   const visibleIds = new Set(visibleNodes.map((node) => node.id));
   const edges = uniqueEdges(visibleEdges(graph, visibleIds, doneStatuses));
-  if (visibleNodes.length === 0) return { nodes: [], edges: [] };
+  const shownInitiatives = new Set(visibleNodes.map((node) => initiativeIdFromNodeId(node.id)));
+  const hidden = items.filter((item) => !shownInitiatives.has(item.id)).length;
+  if (visibleNodes.length === 0) return { nodes: [], edges: [], hidden };
 
   const positions = placeWithDagre(
     visibleNodes.map((node) => node.id),
@@ -115,7 +129,7 @@ export function layoutGraph(items: readonly LayoutItem[], options: LayoutOptions
     return [positioned];
   });
   nodes.sort((left, right) => left.id.localeCompare(right.id));
-  return { nodes, edges };
+  return { nodes, edges, hidden };
 }
 
 export function highlightedNodeIds(

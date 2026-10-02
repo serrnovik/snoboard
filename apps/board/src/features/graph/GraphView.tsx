@@ -15,7 +15,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { PageActionsPortal } from "@/components/page-actions";
 import { setOpenId } from "@/features/details/open";
-import type { BoardPayload } from "@/features/board/model";
+import { useRepoId } from "@/features/repo/context";
+import { initiativeDetailsPath } from "@/lib/ids";
+import { DEFAULT_STALE_AFTER_DAYS, isStale, type BoardPayload } from "@/features/board/model";
 import { rateLimitNote, useBoardResource } from "@/features/board/sync";
 import { NodeSearch } from "@/components/node-search";
 import { ZoomSlider } from "@/components/zoom-slider";
@@ -48,6 +50,7 @@ const DEFAULT_DONE_STATUSES = ["done"];
 const DIMMED_NODE_OPACITY = 0.28;
 const DONE_EDGE_OPACITY = 0.45;
 const DIMMED_EDGE_OPACITY = 0.16;
+const ALL = "";
 const ACTIVE_STATUSES = new Set(["in-progress", "review"]);
 
 type InitiativeFlowNode = FlowNode<GraphNodeData, "initiative">;
@@ -113,13 +116,36 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
   const dark = useDocumentDark();
   const [includePhases, setIncludePhases] = useState(false);
   const [hideDone, setHideDone] = useState(true);
+  const [linkedOnly, setLinkedOnly] = useState(true);
+  const [hideStale, setHideStale] = useState(false);
+  const [project, setProject] = useState(ALL);
+  const [priority, setPriority] = useState(ALL);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const doneStatuses = board.config.doneStatuses ?? DEFAULT_DONE_STATUSES;
   const items = useMemo(() => board.items.map(toLayoutItem), [board.items]);
+  const projects = useMemo(() => uniqueSorted(board.items.map((item) => item.project)), [board.items]);
+  const priorities = useMemo(() => uniqueSorted(board.items.map((item) => item.priority)), [board.items]);
+  const visibleInitiatives = useMemo(() => {
+    if (project === ALL && priority === ALL && !hideStale) return undefined;
+    const now = Date.now();
+    const staleAfterDays = board.config.staleAfterDays ?? DEFAULT_STALE_AFTER_DAYS;
+    const ids = board.items
+      .filter((item) => (project === ALL || item.project === project) && (priority === ALL || item.priority === priority))
+      .filter((item) => !hideStale || !isStale(item, doneStatuses, staleAfterDays, now))
+      .map((item) => item.id);
+    return new Set(ids);
+  }, [board.items, board.config.staleAfterDays, doneStatuses, project, priority, hideStale]);
   const layout = useMemo(
-    () => layoutGraph(items, { includePhases, hideDone, doneStatuses }),
-    [items, includePhases, hideDone, doneStatuses],
+    () => layoutGraph(items, { includePhases, hideDone, doneStatuses, visibleInitiatives, linkedOnly }),
+    [items, includePhases, hideDone, doneStatuses, visibleInitiatives, linkedOnly],
   );
+  const resetFilters = () => {
+    setHideDone(false);
+    setLinkedOnly(false);
+    setHideStale(false);
+    setProject(ALL);
+    setPriority(ALL);
+  };
   const highlighted = useMemo(() => {
     if (selectedId === null) return null;
     return highlightedNodeIds(items, selectedId, { includePhases, doneStatuses });
@@ -139,7 +165,7 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
     () => toFlowEdges(layout.edges, highlighted),
     [layout.edges, highlighted],
   );
-  const layoutKey = `${includePhases}:${hideDone}:${layout.nodes.length}`;
+  const layoutKey = `${includePhases}:${hideDone}:${linkedOnly}:${hideStale}:${project}:${priority}:${layout.nodes.length}`;
 
   const onNodeClick = useCallback<NodeMouseHandler>(
     (_event, node) => {
@@ -199,6 +225,36 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
                 aria-label="Hide done initiatives"
               />
             </label>
+            <label className="flex items-center gap-2">
+              <span>Linked only</span>
+              <Switch
+                size="sm"
+                checked={linkedOnly}
+                onCheckedChange={setLinkedOnly}
+                aria-label="Show only initiatives with dependencies"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span>Hide stale</span>
+              <Switch
+                size="sm"
+                checked={hideStale}
+                onCheckedChange={setHideStale}
+                aria-label="Hide stale initiatives"
+              />
+            </label>
+            <FilterSelect label="Project" value={project} options={projects} onChange={setProject} />
+            <FilterSelect label="Priority" value={priority} options={priorities} onChange={setPriority} />
+            {layout.hidden > 0 ? (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+                title="Clear filters to show everything"
+                onClick={resetFilters}
+              >
+                {layout.hidden} hidden · show all
+              </button>
+            ) : null}
             {selectedId !== null ? (
               <a
                 href={`?open=${encodeURIComponent(initiativeIdFromNodeId(selectedId))}`}
@@ -214,9 +270,12 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
           </div>
         </Panel>
         <ZoomSlider position="bottom-left" />
+        <Panel position="bottom-right">
+          <GraphLegend />
+        </Panel>
         {layout.nodes.length === 0 ? (
           <Panel position="top-center" className="text-sm text-muted-foreground">
-            Nothing to show. Turn off Hide done to include finished initiatives.
+            Nothing matches these filters.
           </Panel>
         ) : null}
       </ReactFlow>
@@ -224,22 +283,86 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
   );
 }
 
+function GraphLegend() {
+  return (
+    <ul className="flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-xs text-card-foreground shadow-md" aria-label="Legend">
+      <li className="flex items-center gap-2">
+        <span className="h-3 w-5 rounded-sm border-2 border-destructive" />
+        Blocked: waits on an unfinished dependency
+      </li>
+      <li className="flex items-center gap-2">
+        <span className="w-5 border-t-2 border-dashed border-destructive" />
+        Dependency not done yet
+      </li>
+      <li className="flex items-center gap-2">
+        <span className="w-5 border-t-2 border-muted-foreground/50" />
+        Dependency done
+      </li>
+      <li className="flex items-center gap-2">
+        <span className="h-3 w-5 rounded-sm border-2 border-muted-foreground border-t-transparent" />
+        Moving border: in progress or in review
+      </li>
+      <li className="text-muted-foreground">Arrows point from dependency to dependent.</li>
+    </ul>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1.5">
+      <span>{label}</span>
+      <select
+        className="h-7 rounded-md border bg-background px-1.5 text-sm"
+        value={value}
+        aria-label={`Filter by ${label.toLowerCase()}`}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value={ALL}>All</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
 function InitiativeNode({ data }: NodeProps<InitiativeFlowNode>) {
-  const detailsHref = detailsPath(data.initiativeId);
+  const detailsHref = initiativeDetailsPath(useRepoId(), data.initiativeId);
   return (
     <NodeStatusIndicator status={indicatorFor(data)}>
       <BaseNode className="h-full w-full">
         <Handle type="target" position={Position.Left} />
-        <BaseNodeHeader className="px-3 py-1.5">
-          <BaseNodeHeaderTitle className="min-w-0 truncate text-sm">
+        <BaseNodeHeader className="px-3 pt-1.5 pb-0">
+          <BaseNodeHeaderTitle className="min-w-0 truncate font-mono text-xs font-normal text-muted-foreground">
             <a href={detailsHref} className="nodrag nopan hover:underline" onClick={(event) => event.stopPropagation()}>
               {data.id}
             </a>
           </BaseNodeHeaderTitle>
-          <Badge variant="outline">{data.status}</Badge>
+          <Badge variant="outline" className="shrink-0">
+            {data.blocked ? "blocked · " : ""}
+            {data.status}
+          </Badge>
         </BaseNodeHeader>
-        <BaseNodeContent className="px-3 py-1">
-          <p className="truncate text-xs text-muted-foreground">{data.title}</p>
+        <BaseNodeContent className="px-3 pt-0.5 pb-1.5">
+          <p className="line-clamp-2 text-sm leading-snug font-medium" title={data.title}>
+            {data.title}
+          </p>
         </BaseNodeContent>
         <Handle type="source" position={Position.Right} />
       </BaseNode>
@@ -388,10 +511,6 @@ function indicatorFor(data: GraphNodeData): NodeStatus {
   if (data.blocked) return "error";
   if (ACTIVE_STATUSES.has(data.status)) return "loading";
   return "initial";
-}
-
-function detailsPath(nodeId: string): string {
-  return `/initiatives/${initiativeIdFromNodeId(nodeId)}`;
 }
 
 function openDetails(nodeId: string): void {

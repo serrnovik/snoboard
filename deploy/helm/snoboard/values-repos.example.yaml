@@ -1,0 +1,27 @@
+# Example overlay: two repositories on one board.
+# helm template snoboard deploy/helm/snoboard -f values-existing-secret.example.yaml -f values-repos.example.yaml
+# Secret snoboard-acme must exist in the release namespace (plus the secrets from
+# values-existing-secret.example.yaml when used). widgets is a public https clone and needs none.
+reposConfig:
+  repos:
+    - id: acme
+      name: Acme platform
+      url: "git@github.com:example/acme.git"
+      sshKeyFile: /var/run/secrets/acme/ssh-key
+      edit:
+        modes: [direct, pr]
+        directBranch: main
+        botTokenFile: /var/run/secrets/acme/bot-token
+    - id: widgets
+      name: Widgets
+      url: "https://github.com/example/widgets.git"
+      # No botTokenFile: only GitHub sign-in submits here, with the user's own token.
+      # Password and Access sign-ins see this repo read-only. Add a botTokenFile
+      # (mounted like acme's) to let them submit too.
+      edit:
+        modes: [pr]
+        githubWriteScope: public_repo
+extraSecretMounts:
+  - name: acme-secrets
+    secretName: snoboard-acme
+    mountPath: /var/run/secrets/acme

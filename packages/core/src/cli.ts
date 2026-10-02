@@ -9,6 +9,7 @@ import { loadConfig, type Config } from "./config.js";
 import { fetch as fetchRefs, listInitiativeFiles, listRefs, readBlobs } from "./git.js";
 import { buildSnapshot, type BoardItem } from "./merge.js";
 import { parseInitiativeFile, type ParsedFile } from "./parse.js";
+import { fixInitiativeText, formatFixEvent, type FixEvent } from "./fix.js";
 import { validate, type ValidationIssue } from "./validate.js";
 import { VERSION } from "./version.js";
 
@@ -19,6 +20,7 @@ Usage:
   snoboard next-number <project> [--repo <dir>] [--fetch]
   snoboard status [--ready | --stale] [--project <project>] [--repo <dir>] [--json]
   snoboard new <project> <slug> [--title <title>] [--priority <priority>] [--repo <dir>] [--fetch]
+  snoboard fix [--repo <dir>] [--dry-run] [--json] [paths...]
   snoboard --version
   snoboard --help
 
@@ -27,6 +29,7 @@ Commands:
   next-number   Print the next free NNN for a project.
   status        List initiatives as a table, or as JSON with --json.
   new           Create the next initiative from the built-in template.
+  fix           Normalise opted-in initiative files in the working tree.
 
 Global flags:
   --repo <dir>  Repository root. Defaults to the current directory.
@@ -55,9 +58,16 @@ new:
   --priority <priority>  Priority. Defaults to p2.
   --fetch                Run git fetch against origin before choosing the number.
 
+fix:
+  --dry-run              Print pending changes and exit 1. Write nothing.
+  --json                 Print changes and reports as JSON.
+  paths                  Optional initiative files or directories. Defaults to
+                         every initiative file under the configured root.
+
 Exit codes:
-  0  Success. Warnings alone do not fail validate.
-  1  Validation errors, or the command failed.
+  0  Success. Warnings alone do not fail validate. fix exits 0 when nothing
+     changed or every change was written.
+  1  Validation errors, pending fix changes with --dry-run, or the command failed.
   2  Invalid arguments.
 `;
 
@@ -66,6 +76,7 @@ const OPTIONS = {
   ref: { type: "string" },
   "changed-since": { type: "string" },
   json: { type: "boolean" },
+  "dry-run": { type: "boolean" },
   fetch: { type: "boolean" },
   ready: { type: "boolean" },
   stale: { type: "boolean" },
@@ -81,6 +92,7 @@ type FlagValues = {
   ref?: string;
   "changed-since"?: string;
   json?: boolean;
+  "dry-run"?: boolean;
   fetch?: boolean;
   ready?: boolean;
   stale?: boolean;
@@ -221,6 +233,9 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
       rejectExtra(positionals, 3, "new takes a project and a slug.");
       rejectFlags(values, ["repo", "title", "priority", "fetch"]);
       return newCommand(positionals[1] ?? "", positionals[2] ?? "", values, io);
+    case "fix":
+      rejectFlags(values, ["repo", "dry-run", "json"]);
+      return fixCommand(positionals.slice(1), values, io);
     default:
       throw new UsageError(`Unknown command "${command}".`);
   }
@@ -236,6 +251,7 @@ function rejectFlags(values: FlagValues, allowed: readonly string[]): void {
     ["ref", "ref"],
     ["changed-since", "changed-since"],
     ["json", "json"],
+    ["dry-run", "dry-run"],
     ["fetch", "fetch"],
     ["ready", "ready"],
     ["stale", "stale"],
@@ -645,7 +661,9 @@ function numberInId(project: string, id: string): number | undefined {
   return Number(rest);
 }
 
-async function readWorkingTree(repoDir: string, config: Config): Promise<ParsedFile[]> {
+type WorkingFile = { path: string; absolute: string };
+
+async function listWorkingTreeFiles(repoDir: string, config: Config): Promise<WorkingFile[]> {
   const root = normalize(config.root);
   const rootDir = path.join(repoDir, ...root.split("/"));
   let projects;
@@ -655,7 +673,7 @@ async function readWorkingTree(repoDir: string, config: Config): Promise<ParsedF
     if (isEnoent(error)) return [];
     throw error;
   }
-  const files: ParsedFile[] = [];
+  const files: WorkingFile[] = [];
   for (const project of projects) {
     if (!project.isDirectory()) continue;
     const projectDir = path.join(rootDir, project.name);
@@ -663,19 +681,78 @@ async function readWorkingTree(repoDir: string, config: Config): Promise<ParsedF
     for (const folder of folders) {
       if (!folder.isDirectory() || numberInFolder(folder.name) === undefined) continue;
       const absolute = path.join(projectDir, folder.name, config.file);
-      let text: string;
       try {
-        text = await readFile(absolute, "utf8");
+        await stat(absolute);
       } catch (error) {
         if (isEnoent(error)) continue;
         throw error;
       }
-      files.push(
-        parseInitiativeFile(repoRelative(root, project.name, folder.name, config.file), text, config),
-      );
+      files.push({
+        path: repoRelative(root, project.name, folder.name, config.file),
+        absolute,
+      });
     }
   }
   return files;
+}
+
+async function readWorkingTree(repoDir: string, config: Config): Promise<ParsedFile[]> {
+  const files: ParsedFile[] = [];
+  for (const file of await listWorkingTreeFiles(repoDir, config)) {
+    files.push(parseInitiativeFile(file.path, await readFile(file.absolute, "utf8"), config));
+  }
+  return files;
+}
+
+function selectWorkingFiles(
+  repoDir: string,
+  files: readonly WorkingFile[],
+  requested: readonly string[],
+): WorkingFile[] {
+  if (requested.length === 0) return [...files];
+  const chosen = new Map<string, WorkingFile>();
+  for (const raw of requested) {
+    const relative = normalize(path.relative(repoDir, path.resolve(repoDir, raw)));
+    if (relative === ".." || relative.startsWith("../")) {
+      throw new CommandError(`Path is outside the repository: ${raw}`);
+    }
+    const matches = files.filter(
+      (file) => file.path === relative || file.path.startsWith(`${relative}/`),
+    );
+    if (matches.length === 0) {
+      throw new CommandError(`No initiative file at ${relative}`);
+    }
+    for (const match of matches) chosen.set(match.path, match);
+  }
+  return [...chosen.values()];
+}
+
+async function fixCommand(
+  requested: readonly string[],
+  values: FlagValues,
+  io: CliIo,
+): Promise<number> {
+  const repoDir = await repoDirOf(values, io);
+  const config = await readConfig(repoDir);
+  const files = selectWorkingFiles(repoDir, await listWorkingTreeFiles(repoDir, config), requested);
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  const events: FixEvent[] = [];
+  let pending = false;
+  for (const file of files) {
+    const text = await readFile(file.absolute, "utf8");
+    const fixed = fixInitiativeText(file.path, text, config);
+    events.push(...fixed.events);
+    if (!fixed.changed) continue;
+    pending = true;
+    if (values["dry-run"] === true) continue;
+    await writeFile(file.absolute, fixed.text);
+  }
+  if (values.json === true) {
+    io.stdout(`${JSON.stringify(events, null, 2)}\n`);
+  } else {
+    for (const event of events) io.stdout(formatFixEvent(event));
+  }
+  return values["dry-run"] === true && pending ? 1 : 0;
 }
 
 async function readAtRef(repoDir: string, ref: string, config: Config): Promise<ParsedFile[]> {

@@ -11,6 +11,7 @@ import {
   signSession,
   usesSecureCookie,
 } from "./session.js";
+import { clearWriteToken } from "./write-tokens.js";
 
 export const PASSWORD_SUBJECT = "password";
 export const PASSWORD_ATTEMPT_LIMIT = 5;
@@ -79,9 +80,12 @@ passwordRouter.post("/password", async (c) => {
 passwordRouter.post("/logout", (c) => {
   const config = getAuthConfig();
   setAuthResponseHeaders(c);
+  // Drop any GitHub write token held for this session before the cookie goes.
+  clearWriteToken(c);
   c.header(
     "set-cookie",
     serializeCookie(SESSION_COOKIE, "", { maxAge: 0, path: "/", secure: usesSecureCookie(config.publicUrl) }),
+    { append: true },
   );
   if (isFormSubmission(c)) return c.redirect("/login", 302);
   return c.json({ ok: true });

@@ -13,6 +13,10 @@ spec:
     metadata:
       labels:
         {{- include "snoboard.selectorLabels" . | nindent 8 }}
+      {{- if .Values.reposConfig }}
+      annotations:
+        checksum/repos-config: {{ toYaml .Values.reposConfig | sha256sum }}
+      {{- end }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -37,6 +41,9 @@ spec:
               value: "0.0.0.0"
             - name: HOME
               value: /tmp
+            # Footer shows the deployed image version instead of the package version.
+            - name: SNOBOARD_VERSION
+              value: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
             - name: SNOBOARD_DATA_DIR
               value: {{ .Values.dataDir | quote }}
             {{- range $key, $value := .Values.env }}
@@ -50,6 +57,10 @@ spec:
             - name: {{ $envName }}
               value: {{ printf "%s/%s" $.Values.secretMountPath $key | quote }}
             {{- end }}
+            {{- end }}
+            {{- if .Values.reposConfig }}
+            - name: SNOBOARD_REPOS_FILE
+              value: {{ printf "%s/repos.yaml" .Values.reposConfigMountPath | quote }}
             {{- end }}
           livenessProbe:
             httpGet:
@@ -85,6 +96,16 @@ spec:
               mountPath: {{ .Values.secretMountPath | quote }}
               readOnly: true
             {{- end }}
+            {{- if .Values.reposConfig }}
+            - name: repos-config
+              mountPath: {{ .Values.reposConfigMountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- range .Values.extraSecretMounts }}
+            - name: {{ .name | quote }}
+              mountPath: {{ .mountPath | quote }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           emptyDir: {}
@@ -100,4 +121,20 @@ spec:
               - key: {{ $key | quote }}
                 path: {{ $key | quote }}
               {{- end }}
+        {{- end }}
+        {{- if .Values.reposConfig }}
+        - name: repos-config
+          configMap:
+            name: {{ include "snoboard.fullname" . }}-repos
+            defaultMode: 0444
+        {{- end }}
+        {{- range .Values.extraSecretMounts }}
+        - name: {{ .name | quote }}
+          secret:
+            secretName: {{ .secretName | quote }}
+            defaultMode: 0444
+            {{- with .items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
         {{- end }}

@@ -64,4 +64,17 @@ describe("InitiativeFrontmatterSchema", () => {
     expect(schema.safeParse({ ...example, updated: "yesterday" }).success).toBe(false);
     expect(schema.safeParse({ ...example, updated: "2026-02-31" }).success).toBe(false);
   });
+
+  it("accepts an optional issues list of strings", () => {
+    expect(
+      schema.parse({
+        ...example,
+        issues: ["gh#12", "gh:acme/widgets#3", "vikunja:9", "linear:ABC-1", "not a ref"],
+      }).issues,
+    ).toEqual(["gh#12", "gh:acme/widgets#3", "vikunja:9", "linear:ABC-1", "not a ref"]);
+  });
+
+  it("rejects an issues entry that is not a string", () => {
+    expect(schema.safeParse({ ...example, issues: [12] }).success).toBe(false);
+  });
 });

@@ -1,4 +1,6 @@
 import type { Config } from "./config.js";
+import { MAX_ISSUE_REFS, parseIssueRef } from "./issues.js";
+import { linkProblem, MAX_LINKS } from "./links.js";
 import { buildGraph, findCycles, type GraphItem } from "./graph.js";
 import type { ParsedFile } from "./parse.js";
 
@@ -140,6 +142,65 @@ export function validate(
     }
   }
 
+  for (const file of initiatives) {
+    const links = file.frontmatter.links ?? [];
+    if (links.length > MAX_LINKS) {
+      issues.push({
+        path: file.path,
+        field: "links",
+        message: `${links.length} links; at most ${MAX_LINKS} are allowed`,
+        severity: "error",
+      });
+    }
+    links.forEach((link, index) => {
+      const problem = linkProblem(link);
+      if (problem === undefined) return;
+      issues.push({ path: file.path, field: "links", message: `link ${index + 1}: ${problem}`, severity: "error" });
+    });
+  }
+
+  for (const file of initiatives) {
+    const refCount = file.frontmatter.issues?.length ?? 0;
+    if (refCount > MAX_ISSUE_REFS) {
+      issues.push({
+        path: file.path,
+        field: "issues",
+        message: `${refCount} issue refs; at most ${MAX_ISSUE_REFS} are allowed`,
+        severity: "error",
+      });
+    }
+    const seenIssueRefs = new Set<string>();
+    for (const refText of file.frontmatter.issues ?? []) {
+      const parsed = parseIssueRef(refText);
+      if (!parsed) {
+        issues.push({
+          path: file.path,
+          field: "issues",
+          message: `invalid issue ref "${refText}"`,
+          severity: "error",
+        });
+        continue;
+      }
+      if (seenIssueRefs.has(parsed.raw)) {
+        issues.push({
+          path: file.path,
+          field: "issues",
+          message: `duplicate issue ref "${parsed.raw}"`,
+          severity: "warning",
+        });
+        continue;
+      }
+      seenIssueRefs.add(parsed.raw);
+      if (!parsed.known) {
+        issues.push({
+          path: file.path,
+          field: "issues",
+          message: `unknown issue provider "${parsed.provider}"`,
+          severity: "warning",
+        });
+      }
+    }
+  }
   const graphItems: GraphItem[] = initiatives.map((file) => ({
     id: file.frontmatter.id,
     status: file.frontmatter.status,

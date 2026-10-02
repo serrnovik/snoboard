@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isBoardPayload, type BoardPayload, type BoardStatus } from "@/features/board/model";
+import { useRepoId } from "@/features/repo/context";
+import { DEFAULT_REPO_ID } from "@/features/basket/store";
+import { repoApi } from "@/lib/routes";
 
 export const CLOCK_TICK_MS = 30_000;
 export const REFRESH_POLL_MS = 1_000;
@@ -18,6 +21,10 @@ export type FetchBoardResult =
   | { kind: "aborted" }
   | { kind: "error"; message: string };
 
+const SNAPSHOT_NOT_READY = "snapshot not ready";
+const WARMUP_RETRY_MS = 2_000;
+const WARMUP_TRIES = 30;
+
 export type PollBoardResult =
   | { kind: "updated"; payload: BoardPayload }
   | { kind: "unauthorized" }
@@ -25,6 +32,7 @@ export type PollBoardResult =
   | { kind: "timeout" };
 
 type PollOptions = {
+  repoId?: string;
   intervalMs?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -66,6 +74,9 @@ export const browserLocation = {
   assign(path: string): void {
     window.location.assign(path);
   },
+  replace(path: string): void {
+    window.location.replace(path);
+  },
 };
 
 export function redirectToLogin(): void {
@@ -94,9 +105,9 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export async function fetchBoard(signal?: AbortSignal): Promise<FetchBoardResult> {
+export async function fetchBoard(signal?: AbortSignal, repoId = DEFAULT_REPO_ID): Promise<FetchBoardResult> {
   try {
-    const response = await fetch("/api/board", { credentials: "same-origin", signal });
+    const response = await fetch(repoApi(repoId, "/board"), { credentials: "same-origin", signal });
     if (signal?.aborted) return { kind: "aborted" };
     if (response.status === 401) {
       redirectToLogin();
@@ -128,7 +139,7 @@ export async function pollBoardUntilChange(
 
   while (now() - started < timeoutMs) {
     if (options.signal?.aborted) return { kind: "aborted" };
-    const outcome = await fetchBoard(options.signal);
+    const outcome = await fetchBoard(options.signal, options.repoId);
     if (outcome.kind === "aborted") return { kind: "aborted" };
     if (outcome.kind === "unauthorized") return { kind: "unauthorized" };
     if (outcome.kind === "error") {
@@ -169,11 +180,14 @@ export function useNow(fixed?: number): readonly [number, () => void] {
 }
 
 export function useBoardResource(options?: {
+  repoId?: string;
   pollIntervalMs?: number;
   now?: number;
   refreshPollMs?: number;
   refreshTimeoutMs?: number;
 }) {
+  const contextRepo = useRepoId();
+  const repoId = options?.repoId ?? contextRepo;
   const pollIntervalMs = options?.pollIntervalMs ?? 60_000;
   const refreshPollMs = options?.refreshPollMs ?? REFRESH_POLL_MS;
   const refreshTimeoutMs = options?.refreshTimeoutMs ?? REFRESH_POLL_MAX_MS;
@@ -215,11 +229,23 @@ export function useBoardResource(options?: {
     const controller = new AbortController();
     let cancelled = false;
 
+    let warmup: number | undefined;
+    let warmupTries = 0;
+
     async function load() {
-      const outcome = await fetchBoard(controller.signal);
+      const outcome = await fetchBoard(controller.signal, repoId);
       if (cancelled || outcome.kind === "aborted" || outcome.kind === "unauthorized") return;
       if (outcome.kind === "error") {
         noteFailure(outcome.message);
+        // Right after the server starts, the first clone is still running: retry soon instead of
+        // waiting for the next poll.
+        if (payloadRef.current === null && outcome.message === SNAPSHOT_NOT_READY && warmupTries < WARMUP_TRIES) {
+          warmupTries += 1;
+          window.clearTimeout(warmup);
+          warmup = window.setTimeout(() => {
+            void load();
+          }, WARMUP_RETRY_MS);
+        }
         return;
       }
       commit(outcome.payload);
@@ -230,6 +256,7 @@ export function useBoardResource(options?: {
       return () => {
         cancelled = true;
         controller.abort();
+        window.clearTimeout(warmup);
       };
     }
     const timer = window.setInterval(() => {
@@ -239,8 +266,9 @@ export function useBoardResource(options?: {
       cancelled = true;
       controller.abort();
       window.clearInterval(timer);
+      window.clearTimeout(warmup);
     };
-  }, [pollIntervalMs, reloadToken, commit, noteFailure]);
+  }, [pollIntervalMs, reloadToken, commit, noteFailure, repoId]);
 
   useEffect(() => () => refreshAbort.current?.abort(), []);
 
@@ -252,7 +280,7 @@ export function useBoardResource(options?: {
     setActionError(null);
     setRateLimited(false);
     try {
-      const response = await fetch("/api/refresh", {
+      const response = await fetch(repoApi(repoId, "/refresh"), {
         method: "POST",
         credentials: "same-origin",
         signal: controller.signal,
@@ -273,6 +301,7 @@ export function useBoardResource(options?: {
       }
       const previous = payloadRef.current === null ? null : statusStamp(payloadRef.current.status);
       const result = await pollBoardUntilChange(previous, {
+        repoId,
         intervalMs: refreshPollMs,
         timeoutMs: refreshTimeoutMs,
         signal: controller.signal,
@@ -289,7 +318,7 @@ export function useBoardResource(options?: {
     } finally {
       if (refreshAbort.current === controller) setRefreshing(false);
     }
-  }, [commit, noteFailure, refreshPollMs, refreshTimeoutMs]);
+  }, [commit, noteFailure, refreshPollMs, refreshTimeoutMs, repoId]);
 
   const retry = useCallback(() => {
     if (payloadRef.current === null) {

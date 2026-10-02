@@ -381,6 +381,31 @@ export async function lastCommitTouching(
 }
 
 /**
+ * Paths under `root` that `refSha` changed since it forked from `baseSha`
+ * (three-dot diff). Needs trees only, so it is safe in a blob-less clone.
+ */
+export async function changedSinceMergeBase(
+  repoDir: string,
+  baseSha: string,
+  refSha: string,
+  root: string,
+  options?: GitCallOptions,
+): Promise<Set<string>> {
+  const result = await git(
+    repoDir,
+    // -z gives raw paths (no C-quoting), matching ls-tree -z output.
+    ["diff", "-z", "--name-only", "--no-renames", `${baseSha}...${refSha}`, "--", root],
+    options,
+  );
+  return new Set(
+    result.stdout
+      .toString("utf8")
+      .split(" ")
+      .filter((path) => path.length > 0),
+  );
+}
+
+/**
  * Newest commit that touches each path under `root` at `ref`.
  * One `git log` walk; the first time a path appears wins.
  * Pass a commit SHA — a partial clone may have no local branch of that name.
@@ -402,6 +427,11 @@ export async function lastCommitsForPaths(
     "--format=%x00%H%x09%cI",
     "--name-only",
     "--diff-merges=first-parent",
+    // Walk the ref's own first-parent line: a file that arrived through a
+    // merge is attributed to that merge, independent of commit-date ties and
+    // of path-limited history simplification (which differs across Git
+    // versions and can hide the merge).
+    "--first-parent",
     // Rename detection reads blob contents, which in a blob:none partial clone
     // means one lazy network fetch per blob. Names-only needs trees alone.
     "--no-renames",
@@ -465,15 +495,7 @@ export async function prefetchMissingBlobs(
   if (unique.length === 0) {
     return 0;
   }
-  const check = await git(repoDir, ["cat-file", "--batch-check"], {
-    ...options,
-    env: { ...options?.env, GIT_NO_LAZY_FETCH: "1" },
-    input: Buffer.from(`${unique.join("\n")}\n`, "utf8"),
-  });
-  const missing = textLines(check.stdout)
-    .filter((line) => line.endsWith(" missing"))
-    .map((line) => line.split(" ")[0] ?? "")
-    .filter((sha) => sha.length > 0);
+  const missing = await findMissingObjects(repoDir, unique, options);
   if (missing.length === 0) {
     return 0;
   }
@@ -500,4 +522,49 @@ export async function prefetchMissingBlobs(
     );
   }
   return missing.length;
+}
+
+/**
+ * Object ids that are not present locally, without triggering lazy fetches.
+ * Newer Git reports "<oid> missing" from `cat-file --batch-check` when lazy
+ * fetching is disabled; Git 2.39 (Debian bookworm) aborts instead. Fall back
+ * to `rev-list --missing=print`, and if that fails too, treat every id as
+ * missing (one batched fetch is still far cheaper than lazy per-blob fetches).
+ */
+async function findMissingObjects(
+  repoDir: string,
+  shas: readonly string[],
+  options?: GitCallOptions,
+): Promise<string[]> {
+  const noLazy = { ...options?.env, GIT_NO_LAZY_FETCH: "1" };
+  try {
+    const check = await git(repoDir, ["cat-file", "--batch-check"], {
+      ...options,
+      env: noLazy,
+      input: Buffer.from(`${shas.join("\n")}\n`, "utf8"),
+    });
+    return textLines(check.stdout)
+      .filter((line) => line.endsWith(" missing"))
+      .map((line) => line.split(" ")[0] ?? "")
+      .filter((sha) => sha.length > 0);
+  } catch {
+    // Fall through to rev-list.
+  }
+  const missing: string[] = [];
+  try {
+    const CHUNK = 200;
+    for (let start = 0; start < shas.length; start += CHUNK) {
+      const listed = await git(
+        repoDir,
+        ["rev-list", "--objects", "--no-walk", "--missing=print", ...shas.slice(start, start + CHUNK)],
+        { ...options, env: noLazy },
+      );
+      for (const line of textLines(listed.stdout)) {
+        if (line.startsWith("?")) missing.push(line.slice(1).trim());
+      }
+    }
+    return missing;
+  } catch {
+    return [...shas];
+  }
 }

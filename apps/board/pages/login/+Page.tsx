@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { VERSION } from "snoboard/browser";
+import { AppVersion } from "@/components/app-version";
 import { useData } from "vike-react/useData";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -21,6 +21,24 @@ function signInDescription(data: LoginPageData): string {
 
 export function Page() {
   const data = useData<LoginPageData>();
+  if (data.cloudflareAccess) {
+    return (
+      <main className="mx-auto flex w-full max-w-lg flex-col gap-6 p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Sign in</CardTitle>
+            <CardDescription>Sign-in is handled by Cloudflare Access</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <a className={cn(buttonVariants({ variant: "outline" }), "w-full")} href="/">
+              Open the board
+            </a>
+          </CardContent>
+        </Card>
+        <footer className="text-sm text-muted-foreground"><AppVersion /></footer>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex w-full max-w-lg flex-col gap-6 p-6">
@@ -58,7 +76,7 @@ export function Page() {
           ) : null}
         </CardContent>
       </Card>
-      <footer className="text-sm text-muted-foreground">Snoboard {VERSION}</footer>
+      <footer className="text-sm text-muted-foreground"><AppVersion /></footer>
     </main>
   );
 }

@@ -41,9 +41,15 @@ COPY --from=build --chown=10001:10001 /prod/board/node_modules /app/apps/board/n
 COPY --from=build --chown=10001:10001 /prod/board/package.json /app/apps/board/package.json
 COPY --from=build --chown=10001:10001 /src/apps/board/dist /app/apps/board/dist
 
+# Optional: --build-arg SNOBOARD_VERSION=<image tag>. Empty falls back to the package version;
+# the Helm charts also set it from image.tag at runtime.
+ARG SNOBOARD_VERSION=""
+LABEL org.opencontainers.image.version="${SNOBOARD_VERSION}"
+
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    SNOBOARD_VERSION=${SNOBOARD_VERSION}
 
 EXPOSE 8080
 USER 10001

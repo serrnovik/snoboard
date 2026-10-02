@@ -78,6 +78,76 @@ describe("initiative details", () => {
     expect(fullPage.querySelector("svg")).toBeNull();
     expect(file.getAttribute("target")).toBe("_blank");
     expect(folder.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(fullPage.getAttribute("href")).toBe("/initiatives/acme-002");
+    expect(fullPage.getAttribute("href")).toBe("/r/default/initiatives/acme-002");
+  });
+
+  it("lists each issue with its title, state, and link", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          ...details(),
+          issues: [
+            {
+              raw: "gh#12",
+              title: "Export",
+              state: "open",
+              url: "https://github.com/acme/widgets/issues/12",
+            },
+            {
+              raw: "vikunja:9",
+              title: "",
+              state: "unknown",
+              url: "https://tasks.example.com/tasks/9",
+            },
+          ],
+        }),
+      ),
+    );
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    const list = await screen.findByTestId("issue-list");
+    const links = list.querySelectorAll("[data-testid=issue-link]");
+    expect(links).toHaveLength(2);
+    const open = links[0];
+    const unknown = links[1];
+    if (open === undefined || unknown === undefined) throw new Error("missing issue link");
+    expect(open.textContent).toContain("Export");
+    expect(open.textContent).toContain("open");
+    expect(open.getAttribute("href")).toBe("https://github.com/acme/widgets/issues/12");
+    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(unknown.getAttribute("data-state")).toBe("unknown");
+    expect(unknown.getAttribute("href")).toBe("https://tasks.example.com/tasks/9");
+    expect(unknown.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(unknown.className).not.toContain("destructive");
+    expect(list.querySelector("[role=alert]")).toBeNull();
+  });
+
+  it("shows external links in a Links section, only https and mailto, opening in a new tab", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          ...details(),
+          summary: "See ![diagram](assets/flow.png) and ![x](https://tracker.example/pixel.gif)",
+          links: [
+            { title: "Design doc", url: "https://docs.example.com/design" },
+            { title: "Team", url: "mailto:team@example.com" },
+            { title: "Evil", url: "javascript:alert(1)" },
+            { title: "Plain", url: "http://example.com" },
+          ],
+        }),
+      ),
+    );
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    const section = await screen.findByTestId("external-links");
+    const anchors = [...section.querySelectorAll("a")];
+    expect(anchors.map((anchor) => anchor.textContent)).toEqual(["Design doc", "Team"]);
+    for (const anchor of anchors) {
+      expect(anchor.getAttribute("rel")).toBe("noopener noreferrer");
+      expect(anchor.getAttribute("target")).toBe("_blank");
+      expect(anchor.querySelector("svg")).not.toBeNull();
+    }
+    const images = [...document.querySelectorAll("[data-testid=details-sheet] img")].map((img) => img.getAttribute("src"));
+    expect(images).toEqual(["/api/repos/default/initiatives/acme-002/assets/flow.png"]);
   });
 });

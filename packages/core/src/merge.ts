@@ -1,5 +1,5 @@
 import type { Config } from "./config.js";
-import {
+import { changedSinceMergeBase,
   lastCommitsForPaths,
   listInitiativeFiles,
   listRefs,
@@ -95,11 +95,15 @@ function selectCandidate(group: readonly Candidate[], config: Config): Candidate
   return pool.reduce((best, candidate) => prefer(best, candidate));
 }
 
-/** Branches whose copy of the file differs from the default branch (edited or added there). */
+/**
+ * Branches that edited or added the file since forking from the default branch
+ * and whose copy still differs from it.
+ */
 function onBranchesFor(
   filePath: string,
   refs: readonly RefInfo[],
   blobsByRef: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  changedByRef: ReadonlyMap<string, ReadonlySet<string>>,
 ): string[] {
   const defaultRef = refs.find((ref) => ref.isDefault);
   const defaultBlob = defaultRef ? blobsByRef.get(defaultRef.name)?.get(filePath) : undefined;
@@ -109,6 +113,8 @@ function onBranchesFor(
       continue;
     }
     const blob = blobsByRef.get(ref.name)?.get(filePath);
+    const changed = changedByRef.get(ref.name);
+    if (changed !== undefined && !changed.has(filePath)) continue;
     if (blob !== undefined && blob !== defaultBlob) {
       names.push(ref.name);
     }
@@ -132,15 +138,24 @@ export async function buildSnapshot(
   });
   const root = config.root.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
 
+  const defaultRefInfo = refs.find((ref) => ref.isDefault);
   const listed = await Promise.all(
     refs.map(async (ref) => {
-      const [files, touches] = await Promise.all([
+      const [files, touches, changed] = await Promise.all([
         listInitiativeFiles(repoDir, ref.sha, config, options),
         lastCommitsForPaths(repoDir, ref.sha, root, options),
+        ref.isDefault || defaultRefInfo === undefined
+          ? Promise.resolve(undefined)
+          : changedSinceMergeBase(repoDir, defaultRefInfo.sha, ref.sha, root, options),
       ]);
-      return { ref, files, touches };
+      return { ref, files, touches, changed };
     }),
   );
+  // Paths each branch edited itself; a copy that is merely older than main does not count.
+  const changedByRef = new Map<string, ReadonlySet<string>>();
+  for (const entry of listed) {
+    if (entry.changed !== undefined) changedByRef.set(entry.ref.name, entry.changed);
+  }
 
   const blobShas: string[] = [];
   const blobsByRef = new Map<string, Map<string, string>>();
@@ -247,7 +262,7 @@ export async function buildSnapshot(
     updatedAt: candidate.touch.date,
     isReady: isReady(graph, candidate.frontmatter.id),
     blockedBy: blockedBy(graph, candidate.frontmatter.id),
-    onBranches: onBranchesFor(candidate.path, refs, blobsByRef),
+    onBranches: onBranchesFor(candidate.path, refs, blobsByRef, changedByRef),
   }));
 
   legacy.sort((left, right) => left.path.localeCompare(right.path));

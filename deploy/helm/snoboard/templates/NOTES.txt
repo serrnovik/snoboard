@@ -3,7 +3,7 @@ Snoboard listens on port {{ .Values.service.port }}.
 
 No existingSecret is set. Password and GitHub sign-in need the secret files listed in values.yaml.
 {{- end }}
-{{- if not .Values.env.SNOBOARD_REPO_URL }}
+{{- if and (not .Values.env.SNOBOARD_REPO_URL) (not .Values.reposConfig.repos) }}
 
-SNOBOARD_REPO_URL is empty. /healthz will pass, and /readyz stays unready until a repository URL is set.
+SNOBOARD_REPO_URL is empty and reposConfig lists no repositories. /healthz will pass, and /readyz stays unready until a repository URL is set.
 {{- end }}

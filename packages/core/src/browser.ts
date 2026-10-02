@@ -9,6 +9,43 @@ export {
   type Phase,
 } from "./schema.js";
 export {
+  issueBaseUrl,
+  issueLinkFor,
+  issueRefFromUrl,
+  MAX_ISSUE_REFS,
+  normalizeIssueRef,
+  parseIssueRef,
+  type IssueLinkConfig,
+  type IssueRef,
+  type IssueUrlResult,
+  type ParsedIssueRef,
+} from "./issues.js";
+export {
+  isSafeLinkUrl,
+  LinkSchema,
+  linkProblem,
+  MAX_LINK_TITLE_LENGTH,
+  MAX_LINK_URL_LENGTH,
+  MAX_LINKS,
+  type ExternalLink,
+} from "./links.js";
+export {
+  ASSET_FILE,
+  ASSET_PATH,
+  ATTACHMENT_TYPES,
+  detectImageType,
+  extensionFor,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_SUBMIT_BODY_BYTES,
+  NEW_INITIATIVE_REF,
+  safeAssetBaseName,
+  typeForExtension,
+  uniqueAssetPath,
+  type AttachmentType,
+} from "./attachments.js";
+export {
   blockedBy,
   blockedChain,
   buildGraph,
@@ -21,3 +58,4 @@ export {
 } from "./graph.js";
 export type { BoardItem, LegacyItem, ParsedFileError, Snapshot } from "./merge.js";
 export type { RefInfo } from "./git.js";
+export { EditSchema, MAX_INITIATIVE_BODY_LENGTH, type Edit } from "./edit-schema.js";

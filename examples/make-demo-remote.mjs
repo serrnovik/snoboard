@@ -35,6 +35,10 @@ function initiative(folder, fields, summary) {
     `updated: ${fields.updated}`,
     `labels: [${(fields.labels ?? []).join(", ")}]`,
   ];
+  if (fields.issues) {
+    lines.push("issues:");
+    for (const ref of fields.issues) lines.push(`  - ${ref}`);
+  }
   if (fields.phases) {
     lines.push("phases:");
     for (const phase of fields.phases) {
@@ -73,6 +77,7 @@ initiative("acme/002-billing", {
 initiative("acme/003-reports", {
   id: "acme-003", title: "Monthly usage reports", status: "planned", priority: "p2",
   depends: ["acme-002"], updated: "2026-09-20", labels: ["reports"],
+  issues: ["gh#12", "gh:acme/widgets#45", "vikunja:34"],
 }, "Account owners get a monthly email summarising usage and cost.");
 initiative("acme/004-search", {
   id: "acme-004", title: "Global search", status: "idea", priority: "p3",
@@ -102,6 +107,7 @@ git(["checkout", "-q", "-b", "initiative/acme-003-reports"]);
 initiative("acme/003-reports", {
   id: "acme-003", title: "Monthly usage reports", status: "in-progress", priority: "p2",
   depends: ["acme-002"], updated: "2026-09-29", labels: ["reports"],
+  issues: ["gh#12", "gh:acme/widgets#45", "vikunja:34"],
 }, "Account owners get a monthly email summarising usage and cost.");
 commit("Start monthly reports", "2026-09-29T10:00:00Z");
 

@@ -56,6 +56,38 @@ describe("layoutGraph", () => {
     expect(blockedEdge).toMatchObject({ done: false, blocked: true });
   });
 
+  it("drops unlinked and filtered initiatives and counts them as hidden", () => {
+    const items: LayoutItem[] = [...demoItems, { id: "acme-004", title: "Loose", status: "planned", depends_on: [] }];
+    const linked = layoutGraph(items, {
+      includePhases: false,
+      hideDone: true,
+      doneStatuses: DONE_STATUSES,
+      linkedOnly: true,
+    });
+    expect(linked.nodes.map((node) => node.id)).toEqual(["acme-002", "acme-003"]);
+    expect(linked.hidden).toBe(2);
+
+    // acme-002 stays: its link to the hidden acme-003 still counts.
+    const partial = layoutGraph(items, {
+      includePhases: false,
+      hideDone: true,
+      doneStatuses: DONE_STATUSES,
+      linkedOnly: true,
+      visibleInitiatives: new Set(["acme-002", "acme-004"]),
+    });
+    expect(partial.nodes.map((node) => node.id)).toEqual(["acme-002"]);
+
+    const filtered = layoutGraph(items, {
+      includePhases: false,
+      hideDone: false,
+      doneStatuses: DONE_STATUSES,
+      visibleInitiatives: new Set(["acme-003", "acme-004"]),
+    });
+    expect(filtered.nodes.map((node) => node.id)).toEqual(["acme-003", "acme-004"]);
+    expect(filtered.edges).toEqual([]);
+    expect(filtered.hidden).toBe(2);
+  });
+
   it("highlights the blocked chain when acme-003 is selected", () => {
     const highlighted = highlightedNodeIds(demoItems, "acme-003", {
       includePhases: false,

@@ -7,6 +7,7 @@ snoboard validate [--repo <dir>] [--ref <ref>] [--changed-since <ref>] [--json]
 snoboard next-number <project> [--repo <dir>] [--fetch]
 snoboard status [--ready | --stale] [--project <project>] [--repo <dir>] [--json]
 snoboard new <project> <slug> [--title <title>] [--priority <priority>] [--repo <dir>] [--fetch]
+snoboard fix [--repo <dir>] [--dry-run] [--json] [paths...]
 snoboard --version
 snoboard --help
 ```
@@ -15,8 +16,8 @@ snoboard --help
 
 | Code | When |
 | --- | --- |
-| 0 | The command succeeded. `validate` also exits 0 when every issue is a warning. |
-| 1 | `validate` found an error, or the command failed (git failed, the destination folder already exists, the template is missing). |
+| 0 | The command succeeded. `validate` also exits 0 when every issue is a warning. `fix` exits 0 when nothing changed or every change was written. |
+| 1 | `validate` found an error, `fix --dry-run` found pending changes, or the command failed (git failed, the destination folder already exists, the template is missing). |
 | 2 | The arguments are invalid. The message is followed by `Run snoboard --help for usage.` |
 
 Usage errors go to stderr. `validate` writes issues to stdout. `status` writes parse errors to stderr and the table or JSON to stdout.
@@ -211,3 +212,39 @@ updated: 2026-09-29
 ```
 
 `snoboard validate` accepts that file.
+
+## fix
+
+```text
+snoboard fix [--repo <dir>] [--dry-run] [--json] [paths...]
+```
+
+Normalise opted-in initiative files in the working tree. `fix` does not read git objects. A file with no `id` is legacy and is left byte-for-byte unchanged. Paths limit the run to those initiative files or to directories that contain them. With no paths, every initiative file under the configured root is considered.
+
+Each change is printed. Unknown status, priority, phase status, and date values are reported and left unchanged. Other keys, key order, comments, and the markdown body stay as they were.
+
+| Change | What is written |
+| --- | --- |
+| `status`, `priority`, phase `status` | Case and separators are folded onto a configured value. `In Progress` and `in_progress` both become `in-progress`. `P1` becomes `p1`. |
+| `id` | Rewritten to `<project>-<NNN>` from the path when the current id differs only by case or padding (`Acme-4` becomes `acme-004`). Any other mismatch is left unchanged. |
+| `updated` | A year-first date such as `2026-9-3` or `2026/9/3` becomes `YYYY-MM-DD`. |
+| `depends_on` | A string becomes a list. Duplicates and self-references (the initiative's own id, including `#phase`) are dropped. |
+| `phases` | Identical entries are dropped. An entry with no `id` receives the next integer after the highest id already present. Existing ids are not renumbered. |
+
+```text
+$ snoboard fix --dry-run
+initiatives/acme/002-billing/initiative.md: status: "In Progress" -> "in-progress"
+initiatives/acme/002-billing/initiative.md: id: "Acme-2" -> "acme-002"
+initiatives/acme/002-billing/initiative.md: updated: "2026-9-3" -> "2026-09-03"
+initiatives/acme/002-billing/initiative.md: priority: unknown value "urgent"
+```
+
+That command writes nothing and exits 1 because a change is pending. After `snoboard fix` applies the changes, the same command exits 0. A run that only reports unknown values also exits 0.
+
+`--json` prints an array. A change has `path`, `field`, `from`, and `to`. A report has `path`, `field`, and `message`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--dry-run` | Print pending changes and exit 1 when any file would change. Write nothing. |
+| `--json` | Print changes and reports as JSON. |
+| `paths` | Optional initiative files or directories. Defaults to every initiative file. |

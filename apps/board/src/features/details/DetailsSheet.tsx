@@ -9,9 +9,17 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { EditControls } from "@/features/details/EditControls";
+import { IssueBadge, normalizeIssues } from "@/features/issues/IssueBadge";
 import { forgeFileUrl, forgeFolderUrl, forgePrUrl, type ForgeLinkConfig } from "./links.js";
 import { SummaryMarkdown } from "./markdown.js";
+import { readLinks } from "./ListEditors";
+import { resolveImageSrc } from "@/features/attachments/images";
+import { isSafeLinkUrl } from "snoboard/browser";
 import { currentOpenId, initiativeIdOf, setOpenId } from "./open.js";
+import { useRepoId } from "@/features/repo/context";
+import { formatQualifiedId, initiativeDetailsPath, parseQualifiedId, shareUrl } from "@/lib/ids";
+import { boardPath, repoApi } from "@/lib/routes";
 
 export type PullEnrichment = {
   state: string;
@@ -88,18 +96,20 @@ export function InitiativePage({ id }: { id: string }) {
 }
 
 function InitiativeBody({ id, variant }: { id: string; variant: "sheet" | "page" }) {
+  const repoId = useRepoId();
   const state = useInitiative(id);
   const title = state.data?.title ?? id;
+  const qualified = formatQualifiedId(repoId, id);
   return (
     <div className="flex flex-col gap-4" data-testid="initiative-details">
       {variant === "sheet" ? (
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
-          <SheetDescription>{id}</SheetDescription>
+          <SheetDescription>{qualified}</SheetDescription>
         </SheetHeader>
       ) : (
         <header className="flex flex-col gap-1">
-          <p className="font-mono text-xs text-muted-foreground">{id}</p>
+          <p className="font-mono text-xs text-muted-foreground">{qualified}</p>
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         </header>
       )}
@@ -117,16 +127,35 @@ function InitiativeBody({ id, variant }: { id: string; variant: "sheet" | "page"
 }
 
 function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant: "sheet" | "page" }) {
+  const repoId = useRepoId();
   const forge = isForge(item.forge) ? item.forge : DEFAULT_FORGE;
   const fileHref = forgeFileUrl(forge, item.sourceRef, item.path);
   const folderHref = forgeFolderUrl(forge, item.sourceRef, item.path);
   const dependencies = item.depends_on ?? [];
+  const issues = normalizeIssues(item.issues);
   return (
     <div className={variant === "sheet" ? "flex flex-col gap-4 px-4 pb-4" : "flex flex-col gap-4"}>
+      <EditControls item={item} />
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">Summary</h2>
-        <SummaryMarkdown markdown={item.summary} />
+        <SummaryMarkdown
+          markdown={item.summary}
+          resolveImage={(src) => resolveImageSrc(src, { repoId, id: item.id })}
+        />
       </section>
+      <ExternalLinks links={item.links} />
+      {issues.length > 0 ? (
+        <section className="flex flex-col gap-2" data-testid="issue-list">
+          <h2 className="text-sm font-medium">Issues</h2>
+          <ul className="flex flex-col gap-2">
+            {issues.map((issue, index) => (
+              <li key={`${issue.raw}:${index}`}>
+                <IssueBadge issue={issue} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">Phases</h2>
         {item.phases === undefined || item.phases.length === 0 ? (
@@ -190,7 +219,19 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
         <dt className="text-muted-foreground">Source</dt>
         <dd className="min-w-0 break-all">{item.sourceRef}</dd>
         <dt className="text-muted-foreground">On branches</dt>
-        <dd className="min-w-0 break-all">{item.onBranches.length === 0 ? "—" : item.onBranches.join(", ")}</dd>
+        <dd className="min-w-0">
+          {item.onBranches.length === 0 ? (
+            "—"
+          ) : (
+            <ul className="max-h-40 overflow-y-auto font-mono text-xs leading-5">
+              {item.onBranches.map((branch) => (
+                <li key={branch} className="truncate" title={branch}>
+                  {branch}
+                </li>
+              ))}
+            </ul>
+          )}
+        </dd>
         <dt className="text-muted-foreground">Last updated</dt>
         <dd>
           <time dateTime={item.updatedAt}>{item.updated}</time>
@@ -200,16 +241,43 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
         <ForgeLink href={fileHref}>initiative.md</ForgeLink>
         <ForgeLink href={folderHref}>Folder</ForgeLink>
         {variant === "sheet" ? (
-          <DetailsLink href={`/initiatives/${encodeURIComponent(item.id)}`}>Open full page</DetailsLink>
+          <DetailsLink href={initiativeDetailsPath(repoId, item.id)}>Open full page</DetailsLink>
         ) : (
-          <DetailsLink href="/">Back to board</DetailsLink>
+          <DetailsLink href={boardPath(repoId)}>Back to board</DetailsLink>
         )}
+        <CopyLink repoId={repoId} id={item.id} />
       </p>
     </div>
   );
 }
 
 const detailsLinkClass = "text-primary underline-offset-4 hover:underline";
+
+/** `links` from frontmatter. Only https: and mailto: URLs become links; anything else is not shown. */
+function ExternalLinks({ links }: { links: unknown }) {
+  const safe = readLinks(links).filter((link) => link.title.trim().length > 0 && isSafeLinkUrl(link.url));
+  if (safe.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-2" data-testid="external-links">
+      <h2 className="text-sm font-medium">Links</h2>
+      <ul className="flex flex-col gap-1 text-sm">
+        {safe.map((link, index) => (
+          <li key={`${link.url}:${index}`} className="min-w-0">
+            <a
+              className={`inline-flex max-w-full items-center gap-1 ${detailsLinkClass}`}
+              href={link.url}
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <span className="truncate">{link.title}</span>
+              <ExternalLink aria-hidden="true" className="size-3.5 shrink-0" />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 function ForgeLink({ href, children }: { href: string; children: string }) {
   return (
@@ -239,6 +307,20 @@ function PullStatus({ enrichment }: { enrichment: PullEnrichment }) {
   );
 }
 
+function CopyLink({ repoId, id }: { repoId: string; id: string }) {
+  return (
+    <button
+      type="button"
+      className={detailsLinkClass}
+      onClick={() => {
+        void navigator.clipboard?.writeText(shareUrl(window.location.origin, repoId, id));
+      }}
+    >
+      Copy link
+    </button>
+  );
+}
+
 function IdList({ ids, variant }: { ids: readonly string[]; variant: "sheet" | "page" }) {
   if (ids.length === 0) return <span>none</span>;
   return (
@@ -251,35 +333,44 @@ function IdList({ ids, variant }: { ids: readonly string[]; variant: "sheet" | "
 }
 
 function DependencyLink({ id, variant }: { id: string; variant: "sheet" | "page" }) {
-  const target = initiativeIdOf(id);
-  if (variant === "page") {
+  const repoId = useRepoId();
+  const hash = id.indexOf("#");
+  const base = hash === -1 ? id : id.slice(0, hash);
+  const phase = hash === -1 ? "" : id.slice(hash);
+  const qualified = parseQualifiedId(base);
+  const targetRepo = qualified?.repo ?? repoId;
+  const targetId = qualified?.id ?? initiativeIdOf(base);
+  const text = `${formatQualifiedId(targetRepo, targetId)}${phase}`;
+  const href = initiativeDetailsPath(targetRepo, targetId);
+  if (variant === "sheet" && targetRepo === repoId) {
     return (
-      <a className="underline" href={`/initiatives/${encodeURIComponent(target)}`}>
-        {id}
+      <a
+        className="underline"
+        href={`?open=${encodeURIComponent(targetId)}`}
+        onClick={(event) => {
+          event.preventDefault();
+          setOpenId(targetId);
+        }}
+      >
+        {text}
       </a>
     );
   }
   return (
-    <a
-      className="underline"
-      href={`?open=${encodeURIComponent(target)}`}
-      onClick={(event) => {
-        event.preventDefault();
-        setOpenId(target);
-      }}
-    >
-      {id}
+    <a className="underline" href={href}>
+      {text}
     </a>
   );
 }
 
 function useInitiative(id: string): LoadState {
+  const repoId = useRepoId();
   const [state, setState] = useState<LoadState>({ phase: "loading", data: null, message: null });
 
   useEffect(() => {
     const controller = new AbortController();
     setState({ phase: "loading", data: null, message: null });
-    void fetch(`/api/initiatives/${encodeURIComponent(id)}`, {
+    void fetch(repoApi(repoId, `/initiatives/${encodeURIComponent(id)}`), {
       credentials: "same-origin",
       signal: controller.signal,
     })
@@ -306,7 +397,7 @@ function useInitiative(id: string): LoadState {
         });
       });
     return () => controller.abort();
-  }, [id]);
+  }, [id, repoId]);
 
   return state;
 }

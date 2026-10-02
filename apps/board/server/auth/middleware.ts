@@ -1,4 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
+import { verifyAccessJwt } from "./cloudflare-access.js";
 import { getAuthConfig, type AuthConfig } from "./env.js";
 import {
   readCookie,
@@ -7,9 +8,15 @@ import {
   type SessionClaims,
 } from "./session.js";
 
+export type CloudflareAccessIdentity = {
+  kind: "cloudflare-access";
+  email: string;
+};
+
 export type BoardEnv = {
   Variables: {
     session: SessionClaims | undefined;
+    identity: CloudflareAccessIdentity | undefined;
   };
 };
 
@@ -41,6 +48,13 @@ export const authMiddleware: MiddlewareHandler<BoardEnv> = async (c, next) => {
     await next();
     return;
   }
+  if (config.modes.includes("cloudflare-access")) {
+    const identity = await readAccessIdentity(c, config);
+    if (identity === null) return rejectAccess(c, path);
+    c.set("identity", identity);
+    await next();
+    return;
+  }
   const session = readSession(c, config);
   if (session === null) {
     if (isApiPath(path)) return c.json({ error: "authentication required" }, 401);
@@ -50,7 +64,11 @@ export const authMiddleware: MiddlewareHandler<BoardEnv> = async (c, next) => {
   await next();
 };
 
-export function renderAuthHtml(title: string, message: string): string {
+export function renderAuthHtml(
+  title: string,
+  message: string,
+  link: { href: string; label: string } = { href: "/login", label: "Back to sign in" },
+): string {
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message);
   return [
@@ -65,7 +83,7 @@ export function renderAuthHtml(title: string, message: string): string {
     "<main>",
     `<h1>${safeTitle}</h1>`,
     `<p>${safeMessage}</p>`,
-    '<p><a href="/login">Back to sign in</a></p>',
+    `<p><a href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a></p>`,
     "</main>",
     "</body>",
     "</html>",
@@ -77,6 +95,8 @@ export function isPublicPath(pathname: string): boolean {
   if (pathname === "/healthz" || pathname === "/readyz" || pathname === "/favicon.ico") return true;
   if (pathname.startsWith("/auth/")) return true;
   if (pathname.startsWith("/assets/")) return true;
+  // API responses are never public because of a file extension (initiative images end in .png).
+  if (isApiPath(pathname)) return false;
   const slash = pathname.lastIndexOf("/");
   const base = slash === -1 ? pathname : pathname.slice(slash + 1);
   const dot = base.lastIndexOf(".");
@@ -86,6 +106,39 @@ export function isPublicPath(pathname: string): boolean {
 
 export function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
+
+async function readAccessIdentity(c: Context<BoardEnv>, config: AuthConfig): Promise<CloudflareAccessIdentity | null> {
+  const access = config.cloudflareAccess;
+  if (access === undefined) return null;
+  // The JWT header is the only credential. CF_Authorization and
+  // Cf-Access-Authenticated-User-Email are not proof of identity.
+  const token = readJwtAssertion(c.req.header(ACCESS_JWT_HEADER));
+  if (token === null) return null;
+  const result = await verifyAccessJwt(token, access, Date.now());
+  if (!result.ok) return null;
+  return { kind: "cloudflare-access", email: result.identity.email };
+}
+
+function readJwtAssertion(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const token = value.trim();
+  if (token.length === 0 || token.length > 8192) return null;
+  if (token.includes(",") || /\s/.test(token)) return null;
+  return token;
+}
+
+function rejectAccess(c: Context<BoardEnv>, path: string): Response {
+  if (isApiPath(path)) return c.json({ error: "authentication required" }, 401);
+  return c.html(
+    renderAuthHtml("Access denied", "Sign-in is handled by Cloudflare Access.", {
+      href: "/cdn-cgi/access/logout",
+      label: "Sign out of Cloudflare Access",
+    }),
+    403,
+  );
 }
 
 function readSession(c: Context<BoardEnv>, config: AuthConfig): SessionClaims | null {

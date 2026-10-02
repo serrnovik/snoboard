@@ -46,6 +46,7 @@ export default async function globalSetup(): Promise<void> {
   const dataDir = path.join(root, "data");
   const hashFile = path.join(root, "password-hash");
   const secretFile = path.join(root, "session-secret");
+  const botTokenFile = path.join(root, "bot-token");
   await mkdir(dataDir, { recursive: true });
   await run(process.execPath, [path.join(workspaceRoot, "examples/make-demo-remote.mjs"), remote]);
   const passwordHash = await hash(E2E_PASSWORD, {
@@ -56,6 +57,8 @@ export default async function globalSetup(): Promise<void> {
   });
   await writeFile(hashFile, `${passwordHash}\n`, "utf8");
   await writeFile(secretFile, randomBytes(48).toString("base64"), "utf8");
+  // Password users submit through the bot; fake-github.mjs answers its calls.
+  await writeFile(botTokenFile, "e2e-synthetic-bot-token", "utf8");
   const fixture = {
     PORT: String(E2E_PORT),
     SNOBOARD_AUTH_MODES: "password",
@@ -65,6 +68,11 @@ export default async function globalSetup(): Promise<void> {
     SNOBOARD_PASSWORD_HASH_FILE: hashFile,
     SNOBOARD_SESSION_SECRET_FILE: secretFile,
     SNOBOARD_REFRESH_SECONDS: "3600",
+    SNOBOARD_EDIT_MODES: "pr,direct",
+    SNOBOARD_EDIT_DIRECT_BRANCH: "main",
+    SNOBOARD_EDIT_BOT_TOKEN_FILE: botTokenFile,
+    // Read only by e2e/fake-github.mjs, never by the server itself.
+    SNOBOARD_E2E_FAKE_GITHUB_DIR: remote,
   };
   await writeFile(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
 }

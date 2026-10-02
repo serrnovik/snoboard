@@ -170,6 +170,8 @@ interface KanbanContextValue<T> {
   strategy: SortableContextProps["strategy"];
   orientation: "horizontal" | "vertical";
   activeId: UniqueIdentifier | null;
+  activeColumnId: UniqueIdentifier | null;
+  dropColumnId: UniqueIdentifier | null;
   setActiveId: (id: UniqueIdentifier | null) => void;
   getItemValue: (item: T) => UniqueIdentifier;
   flatCursor: boolean;
@@ -223,8 +225,7 @@ function Kanban<T>(props: KanbanProps<T>) {
 
   const id = React.useId();
   const [activeId, setActiveId] = React.useState<UniqueIdentifier | null>(null);
-  const lastOverIdRef = React.useRef<UniqueIdentifier | null>(null);
-  const hasMovedRef = React.useRef(false);
+  const [dropColumnId, setDropColumnId] = React.useState<UniqueIdentifier | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor),
     useSensor(TouchSensor),
@@ -274,18 +275,17 @@ function Kanban<T>(props: KanbanProps<T>) {
       }
 
       const pointerIntersections = pointerWithin(args);
+      // A pointer outside every column is not a drop. Keyboard drags have no
+      // pointer, so they keep using rectangle intersection.
       const intersections =
         pointerIntersections.length > 0
           ? pointerIntersections
-          : rectIntersection(args);
+          : args.pointerCoordinates == null
+            ? rectIntersection(args)
+            : [];
       let overId = getFirstCollision(intersections, "id");
 
-      if (!overId) {
-        if (hasMovedRef.current) {
-          lastOverIdRef.current = activeId;
-        }
-        return lastOverIdRef.current ? [{ id: lastOverIdRef.current }] : [];
-      }
+      if (overId == null) return [];
 
       if (overId in value) {
         const containerItems = value[overId];
@@ -307,7 +307,6 @@ function Kanban<T>(props: KanbanProps<T>) {
         }
       }
 
-      lastOverIdRef.current = overId;
       return [{ id: overId }];
     },
     [activeId, value, getItemValue],
@@ -318,6 +317,7 @@ function Kanban<T>(props: KanbanProps<T>) {
       kanbanProps.onDragStart?.(event);
 
       if (event.activatorEvent.defaultPrevented) return;
+      setDropColumnId(null);
       setActiveId(event.active.id);
     },
     [kanbanProps.onDragStart],
@@ -329,70 +329,38 @@ function Kanban<T>(props: KanbanProps<T>) {
 
       if (event.activatorEvent.defaultPrevented) return;
 
+      // Column membership stays put until drop. This only records the column
+      // under the pointer so the board can highlight it.
       const { active, over } = event;
-      if (!over) return;
-
-      const activeColumn = getColumn(active.id);
-      const overColumn = getColumn(over.id);
-
-      if (!activeColumn || !overColumn) return;
-
-      if (activeColumn === overColumn) {
-        const items = value[activeColumn];
-        if (!items) return;
-
-        const activeIndex = items.findIndex(
-          (item) => getItemValue(item) === active.id,
-        );
-        const overIndex = items.findIndex(
-          (item) => getItemValue(item) === over.id,
-        );
-
-        if (activeIndex !== overIndex) {
-          const newColumns = { ...value };
-          newColumns[activeColumn] = arrayMove(items, activeIndex, overIndex);
-          onValueChange?.(newColumns);
-        }
-      } else {
-        const activeItems = value[activeColumn];
-        const overItems = value[overColumn];
-
-        if (!activeItems || !overItems) return;
-
-        const activeIndex = activeItems.findIndex(
-          (item) => getItemValue(item) === active.id,
-        );
-
-        if (activeIndex === -1) return;
-
-        const activeItem = activeItems[activeIndex];
-        if (!activeItem) return;
-
-        const updatedItems = {
-          ...value,
-          [activeColumn]: activeItems.filter(
-            (item) => getItemValue(item) !== active.id,
-          ),
-          [overColumn]: [...overItems, activeItem],
-        };
-
-        onValueChange?.(updatedItems);
-        hasMovedRef.current = true;
+      if (!over || active.id in value) {
+        setDropColumnId((current) => (current === null ? current : null));
+        return;
       }
+
+      const overColumn = getColumn(over.id);
+      setDropColumnId((current) => (current === overColumn ? current : overColumn));
     },
-    [value, getColumn, getItemValue, onValueChange, kanbanProps.onDragOver],
+    [value, getColumn, kanbanProps.onDragOver],
   );
 
   const onDragEnd = React.useCallback(
     (event: DragEndEvent) => {
       kanbanProps.onDragEnd?.(event);
 
-      if (event.activatorEvent.defaultPrevented) return;
+      const finish = () => {
+        setActiveId(null);
+        setDropColumnId(null);
+      };
+
+      if (event.activatorEvent.defaultPrevented) {
+        finish();
+        return;
+      }
 
       const { active, over } = event;
 
       if (!over) {
-        setActiveId(null);
+        finish();
         return;
       }
 
@@ -422,43 +390,33 @@ function Kanban<T>(props: KanbanProps<T>) {
         const activeColumn = getColumn(active.id);
         const overColumn = getColumn(over.id);
 
-        if (!activeColumn || !overColumn) {
-          setActiveId(null);
-          return;
-        }
-
-        if (activeColumn === overColumn) {
-          const items = value[activeColumn];
-          if (!items) {
-            setActiveId(null);
-            return;
-          }
-
-          const activeIndex = items.findIndex(
-            (item) => getItemValue(item) === active.id,
-          );
-          const overIndex = items.findIndex(
-            (item) => getItemValue(item) === over.id,
-          );
-
-          if (activeIndex !== overIndex) {
-            const newColumns = { ...value };
-            newColumns[activeColumn] = arrayMove(items, activeIndex, overIndex);
-            if (onMove) {
-              onMove({
-                ...event,
-                activeIndex,
-                overIndex,
+        // Same column, or a release outside a column: leave the board unchanged.
+        if (activeColumn && overColumn && activeColumn !== overColumn) {
+          const activeItems = value[activeColumn];
+          const overItems = value[overColumn];
+          if (activeItems && overItems) {
+            const activeIndex = activeItems.findIndex(
+              (item) => getItemValue(item) === active.id,
+            );
+            const activeItem = activeIndex === -1 ? undefined : activeItems[activeIndex];
+            if (activeItem) {
+              const nextOver = [...overItems];
+              const overIndex =
+                over.id === overColumn
+                  ? nextOver.length
+                  : overItems.findIndex((item) => getItemValue(item) === over.id);
+              nextOver.splice(overIndex === -1 ? nextOver.length : overIndex, 0, activeItem);
+              onValueChange?.({
+                ...value,
+                [activeColumn]: activeItems.filter((item) => getItemValue(item) !== active.id),
+                [overColumn]: nextOver,
               });
-            } else {
-              onValueChange?.(newColumns);
             }
           }
         }
       }
 
-      setActiveId(null);
-      hasMovedRef.current = false;
+      finish();
     },
     [
       value,
@@ -477,7 +435,7 @@ function Kanban<T>(props: KanbanProps<T>) {
       if (event.activatorEvent.defaultPrevented) return;
 
       setActiveId(null);
-      hasMovedRef.current = false;
+      setDropColumnId(null);
     },
     [kanbanProps.onDragCancel],
   );
@@ -588,6 +546,14 @@ function Kanban<T>(props: KanbanProps<T>) {
     [value, getColumn, getItemValue],
   );
 
+  const activeColumnId = React.useMemo(() => {
+    if (activeId == null || activeId in value) return null;
+    for (const [columnId, columnItems] of Object.entries(value)) {
+      if (columnItems.some((item) => getItemValue(item) === activeId)) return columnId;
+    }
+    return null;
+  }, [activeId, value, getItemValue]);
+
   const contextValue = React.useMemo<KanbanContextValue<T>>(
     () => ({
       id,
@@ -596,6 +562,8 @@ function Kanban<T>(props: KanbanProps<T>) {
       strategy,
       orientation,
       activeId,
+      activeColumnId,
+      dropColumnId,
       setActiveId,
       getItemValue,
       flatCursor,
@@ -604,6 +572,8 @@ function Kanban<T>(props: KanbanProps<T>) {
       id,
       value,
       activeId,
+      activeColumnId,
+      dropColumnId,
       modifiers,
       strategy,
       orientation,
@@ -795,6 +765,8 @@ function KanbanColumn(props: KanbanColumnProps) {
     return columnItems.map((item) => context.getItemValue(item));
   }, [context.items, value, context.getItemValue]);
 
+  const isDropTarget = context.dropColumnId != null && context.dropColumnId === value;
+
   const columnContext = React.useMemo<KanbanColumnContextValue>(
     () => ({
       id,
@@ -817,8 +789,9 @@ function KanbanColumn(props: KanbanColumnProps) {
         id,
         ref: composedRef,
         style: composedStyle,
+        ...(isDropTarget ? { "data-drop-target": "true" } : {}),
         className: cn(
-          "flex size-full flex-col gap-2 rounded-lg border bg-zinc-100 p-2.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:bg-zinc-900",
+          "flex size-full flex-col gap-2 rounded-lg border border-border bg-muted p-2.5 aria-disabled:pointer-events-none aria-disabled:opacity-50",
           {
             "touch-none select-none": asHandle,
             "cursor-default": context.flatCursor,
@@ -828,6 +801,8 @@ function KanbanColumn(props: KanbanColumnProps) {
             "pointer-events-none opacity-50": disabled,
           },
           className,
+          isDropTarget &&
+            "ring-2 ring-primary outline outline-2 outline-offset-2 outline-primary bg-primary/10!",
         ),
       },
       columnProps,
@@ -989,11 +964,12 @@ function KanbanItem(props: KanbanItemProps) {
 
   const composedStyle = React.useMemo<React.CSSProperties>(() => {
     return {
-      transform: CSS.Transform.toString(transform),
-      transition,
+      // Keep the source card in its column until the pointer is released.
+      transform: isDragging ? undefined : CSS.Transform.toString(transform),
+      transition: isDragging ? undefined : transition,
       ...style,
     };
-  }, [transform, transition, style]);
+  }, [isDragging, transform, transition, style]);
 
   const itemContext = React.useMemo<KanbanItemContextValue>(
     () => ({
@@ -1167,6 +1143,15 @@ function KanbanOverlay(props: KanbanOverlayProps) {
   );
 }
 
+function useKanbanDrop() {
+  const context = useKanbanContext("KanbanDrop");
+  return {
+    activeId: context.activeId,
+    activeColumnId: context.activeColumnId,
+    dropColumnId: context.dropColumnId,
+  };
+}
+
 export {
   Kanban,
   KanbanBoard,
@@ -1175,5 +1160,6 @@ export {
   KanbanItem,
   KanbanItemHandle,
   KanbanOverlay,
+  useKanbanDrop,
   type KanbanProps,
 };

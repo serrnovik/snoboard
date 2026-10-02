@@ -6,13 +6,17 @@ function blankToUndefined(value: unknown): unknown {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-export const BoardEnvSchema = z.object({
-  SNOBOARD_REPO_URL: z.string().min(1),
+const runtimeFields = {
   SNOBOARD_DATA_DIR: z.string().min(1).default("/tmp/snoboard"),
   SNOBOARD_REFRESH_SECONDS: z.preprocess(
     (value) => (value === undefined || value === "" ? undefined : value),
     z.coerce.number().int().positive().default(120),
   ),
+};
+
+export const BoardEnvSchema = z.object({
+  SNOBOARD_REPO_URL: z.string().min(1),
+  ...runtimeFields,
   SNOBOARD_SSH_KEY_FILE: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   SNOBOARD_GIT_TOKEN_FILE: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   SNOBOARD_CONFIG_PATH: z.preprocess(blankToUndefined, z.string().min(1).optional()),
@@ -34,6 +38,22 @@ function formatIssues(error: z.ZodError): string {
       return `${path}: ${issue.message}`;
     })
     .join("; ");
+}
+
+export function loadSyncSettings(source: NodeJS.ProcessEnv): { dataDir: string; refreshSeconds: number } {
+  const parsed = z
+    .object(runtimeFields)
+    .safeParse({
+      SNOBOARD_DATA_DIR: source.SNOBOARD_DATA_DIR,
+      SNOBOARD_REFRESH_SECONDS: source.SNOBOARD_REFRESH_SECONDS,
+    });
+  if (!parsed.success) {
+    throw new Error(`Invalid Snoboard environment: ${formatIssues(parsed.error)}`);
+  }
+  return {
+    dataDir: parsed.data.SNOBOARD_DATA_DIR.trim(),
+    refreshSeconds: parsed.data.SNOBOARD_REFRESH_SECONDS,
+  };
 }
 
 export function loadBoardEnv(source: NodeJS.ProcessEnv): BoardEnv {

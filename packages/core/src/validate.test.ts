@@ -358,4 +358,47 @@ describe("validate", () => {
       severity: "error",
     });
   });
+
+  it("reports bad issue syntax, unknown providers, and duplicates", () => {
+    const file = initiative({
+      path: "initiatives/acme/001-onboarding/initiative.md",
+      project: "acme",
+      number: "001",
+      id: "acme-001",
+    });
+    if (file.kind !== "initiative") throw new Error("expected an initiative");
+    file.frontmatter.issues = ["gh#12", "nope", "linear:ABC-1", "gh#12", "vikunja:4"];
+    expect(validate([file], config)).toEqual([
+      {
+        path: "initiatives/acme/001-onboarding/initiative.md",
+        field: "issues",
+        message: 'invalid issue ref "nope"',
+        severity: "error",
+      },
+      {
+        path: "initiatives/acme/001-onboarding/initiative.md",
+        field: "issues",
+        message: 'unknown issue provider "linear"',
+        severity: "warning",
+      },
+      {
+        path: "initiatives/acme/001-onboarding/initiative.md",
+        field: "issues",
+        message: 'duplicate issue ref "gh#12"',
+        severity: "warning",
+      },
+    ]);
+  });
+
+  it("accepts known issue refs", () => {
+    const file = initiative({
+      path: "initiatives/acme/003-reports/initiative.md",
+      project: "acme",
+      number: "003",
+      id: "acme-003",
+    });
+    if (file.kind !== "initiative") throw new Error("expected an initiative");
+    file.frontmatter.issues = ["gh#12", "gh:acme/widgets#45", "vikunja:34"];
+    expect(validate([file], config)).toEqual([]);
+  });
 });

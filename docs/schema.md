@@ -22,9 +22,48 @@ initiatives/<project>/<NNN>-<slug>/initiative.md
 | `branch` | no | Non-empty string |
 | `updated` | yes | Calendar date `YYYY-MM-DD` |
 | `labels` | no | List of non-empty strings |
+| `issues` | no | List of at most 30 issue refs. Each entry is `gh#123`, `gh:owner/name#123`, `vj:456` (alias `vikunja:456`), or `<provider>:<key>` |
+| `links` | no | List of at most 20 external links: `{ title, url }`. See [Links](#links) |
 | `phases` | no | List of phase objects |
 
 A dependency is either an initiative id (`acme-002`) or an initiative id plus a phase (`acme-001#2`). The phase number has no leading zeros.
+
+`issues` lists related tracker items. `gh#123` is an issue in the configured GitHub repository. `gh:owner/name#123` names that repository. `vj:456` is a Vikunja task id; `vikunja:456` is accepted as an alias, and the board editor stores new entries as `vj:456`. Any other `<provider>:<key>` is kept and reported as an unknown provider.
+
+The board can edit this list (details panel, **Issues**). Each new ref is checked with the same parser as
+validation; a ref that does not parse is refused before it reaches the basket.
+
+### Links
+
+`links` lists related pages outside the repository: a design doc, a dashboard, a mailing list.
+
+| Field | Required | Allowed values |
+| --- | --- | --- |
+| `title` | yes | 1 to 120 characters, no line breaks |
+| `url` | yes | An absolute `https:` or `mailto:` URL, at most 2048 characters, no spaces |
+
+```yaml
+links:
+  - title: Design doc
+    url: https://docs.example.com/reports
+  - title: Team
+    url: mailto:reports@example.com
+```
+
+The board shows them in a **Links** section of the details panel (new tab, `rel="noopener noreferrer"`) and
+can edit them. A link with another scheme (`http:`, `javascript:`, `data:`, ...) is a validation error and is
+never rendered.
+
+### Attachments
+
+Images attached from the board are committed next to the initiative file, in `assets/`:
+
+```text
+initiatives/<project>/<NNN>-<slug>/assets/<name>.<png|jpg|webp|gif>
+```
+
+`<name>` uses lowercase letters, digits and single hyphens. The body links them with a relative path, for
+example `![diagram](assets/diagram.png)`. They are not a frontmatter field and are not validated.
 
 ### Phase fields
 
@@ -49,6 +88,11 @@ Validation reports each problem as `{ path, field, message, severity }`. Severit
 - The dependency graph must not contain a cycle.
 - When the initiative `status` is a done status, no phase may have status `in-progress` or `review`.
 - **Warning:** `updated` is more than `staleAfterDays` before today. Done statuses are exempt, and so are the statuses `parked` and `dropped`.
+- **Error:** an `issues` entry is not a valid ref.
+- **Error:** more than 30 `issues` entries.
+- **Error:** more than 20 `links`, or a link with an empty or too long title, or a URL that is not `https:` or `mailto:`.
+- **Warning:** an `issues` entry uses a provider other than `gh`, `vj` or `vikunja`.
+- **Warning:** an `issues` entry is repeated.
 
 ## Example
 
@@ -65,6 +109,10 @@ branch: initiative/acme-003-reports
 updated: 2026-09-29
 labels:
   - billing
+issues:
+  - gh#123
+  - gh:acme/widgets#45
+  - vj:456
 phases:
   - id: 1
     title: Data collection

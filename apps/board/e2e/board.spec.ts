@@ -14,7 +14,8 @@ test("unauthenticated board API returns 401", async ({ request }) => {
 test("password login walks the board, details, and graph", async ({ page }) => {
   await mkdir(imgDir, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/login");
+  const login = await page.goto("/login");
+  expect(await login?.text()).toContain('localStorage.getItem("snoboard-theme")');
   await page.getByLabel("Password").fill(E2E_PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
 
@@ -54,8 +55,17 @@ test("password login walks the board, details, and graph", async ({ page }) => {
     animations: "disabled",
   });
 
+  await page.getByRole("radio", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  const reloaded = await page.reload();
+  expect(await reloaded?.text()).toContain('localStorage.getItem("snoboard-theme")');
+  await expect(page.getByLabel("Dependency graph")).toBeVisible();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+
   const refresh = page.waitForResponse(
-    (response) => response.url().endsWith("/api/refresh") && response.request().method() === "POST",
+    (response) => response.url().endsWith("/refresh") && response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Refresh" }).click();
   expect((await refresh).status()).toBe(202);
@@ -68,7 +78,7 @@ test("password login walks the board, details, and graph", async ({ page }) => {
   const boardLink = page.getByRole("link", { name: "Board", exact: true });
   const dependenciesLink = page.getByRole("link", { name: "Dependencies" });
   const logout = page.getByRole("button", { name: "Log out" });
-  const theme = page.getByRole("button", { name: /Switch to (dark|light) mode/ });
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
   await expect(boardLink).toBeVisible();
   await expect(dependenciesLink).toBeVisible();
   await expect(logout).toBeVisible();
@@ -107,6 +117,21 @@ test("password login walks the board, details, and graph", async ({ page }) => {
 
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page.getByLabel("Password")).toBeVisible();
+});
+
+test("demo repo shows issue refs on the card and in details", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Password").fill(E2E_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const card = page.getByTestId("card-acme-003");
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByTestId("issue-count")).toHaveAttribute("aria-label", "3 issues");
+  await card.getByRole("link", { name: "Monthly usage reports" }).click();
+  const list = page.getByRole("dialog").getByTestId("issue-list");
+  await expect(list.getByText("gh#12")).toBeVisible();
+  await expect(list.getByText("gh:acme/widgets#45")).toBeVisible();
+  await expect(list.getByText("vikunja:34")).toBeVisible();
+  await expect(list.locator("[role=alert]")).toHaveCount(0);
 });
 
 function overlaps(

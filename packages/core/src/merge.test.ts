@@ -497,6 +497,28 @@ describe("buildSnapshot", () => {
     expect(byId(snapshot, "acme-001")).toMatchObject({ sourceRef: "main" });
   }, 30_000);
 
+  it("does not list a branch whose copy is only older than main", async () => {
+    const repo = track(await createTmpRepo());
+    const file = "initiatives/acme/001-onboarding/initiative.md";
+    await repo.commit({
+      date: "2024-01-01T00:00:00Z",
+      files: { [file]: initiative({ id: "acme-001", title: "Onboarding", status: "planned", summary: "Old." }) },
+    });
+    await repo.commit({
+      branch: "initiative/other",
+      date: "2024-02-01T00:00:00Z",
+      files: { "initiatives/acme/002-équipe/initiative.md": initiative({ id: "acme-002", title: "Other", status: "planned", summary: "Other." }) },
+    });
+    await repo.commit({
+      date: "2024-03-01T00:00:00Z",
+      files: { [file]: initiative({ id: "acme-001", title: "Onboarding", status: "in-progress", summary: "New on main." }) },
+    });
+
+    const snapshot = await buildSnapshot(repo.dir, config);
+    expect(byId(snapshot, "acme-001")).toMatchObject({ status: "in-progress", sourceRef: "main", onBranches: [] });
+    expect(byId(snapshot, "acme-002").onBranches).toEqual(["initiative/other"]);
+  }, 30_000);
+
   it("reads a partial clone by commit sha and does not fetch", async () => {
     const source: TmpRepo = track(
       await createTmpRepo({

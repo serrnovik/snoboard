@@ -1,5 +1,5 @@
-import { Board } from "@/features/board/Board";
+import { LegacyRedirect } from "@/components/legacy-redirect";
 
 export function Page() {
-  return <Board />;
+  return <LegacyRedirect />;
 }

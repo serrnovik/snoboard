@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
-import { getAuthConfig, type GithubAuthConfig } from "./env.js";
+import { editSettingsFor, findActiveRepo, listActiveRepos } from "../repos-config.js";
+import { getAuthConfig, type GithubAuthConfig, type GithubWriteScope } from "./env.js";
 import { renderAuthHtml, type BoardEnv } from "./middleware.js";
 import {
   openEncoded,
@@ -13,7 +14,10 @@ import {
   signEncoded,
   signSession,
   usesSecureCookie,
+  verifySession,
+  type SessionClaims,
 } from "./session.js";
+import { clearWriteToken, sessionKeyOf, storeWriteToken, writeCookie } from "./write-tokens.js";
 
 export const OAUTH_COOKIE = "snoboard_oauth";
 export const OAUTH_TTL_MS = 10 * 60 * 1000;
@@ -24,11 +28,23 @@ const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 const ORGS_URL = "https://api.github.com/user/orgs?per_page=100";
 
+export type OAuthPurpose = "login" | "write";
+
 export type OAuthPending = {
   state: string;
   verifier: string;
   exp: number;
+  /** `login` signs in (read scopes only). `write` asks for repo write access for an existing session. */
+  purpose: OAuthPurpose;
+  /** Same-origin path to return to after a write grant. */
+  returnTo?: string;
+  /** The session that started a write grant; the callback must present the same session. */
+  sessionKey?: string;
+  /** Write scope asked for, taken from the target repo's settings. */
+  scope?: GithubWriteScope;
 };
+
+const MAX_RETURN_LENGTH = 512;
 
 type AuthLogger = {
   info(message: string): void;
@@ -83,7 +99,7 @@ githubRouter.get("/github", (c) => {
   const state = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const now = Date.now();
-  const pending: OAuthPending = { state, verifier, exp: now + OAUTH_TTL_MS };
+  const pending: OAuthPending = { state, verifier, exp: now + OAUTH_TTL_MS, purpose: "login" };
   c.header("Cache-Control", "no-store");
   c.header("Referrer-Policy", "no-referrer");
   c.header(
@@ -95,6 +111,46 @@ githubRouter.get("/github", (c) => {
     }),
   );
   return c.redirect(authorizeUrl(config.publicUrl ?? "", github, pending), 302);
+});
+
+// Incremental write grant. Same OAuth app, same callback URL; the purpose
+// rides in the signed pending cookie, never in the query string.
+githubRouter.get("/github/write", (c) => {
+  const ready = githubReady();
+  if (ready === null) return c.notFound();
+  // The target repo picks the scope (public_repo vs repo); editing must be on for that repo.
+  const repoId = c.req.query("repo") ?? listActiveRepos()[0]?.id ?? "default";
+  if (!/^[a-z0-9-]{1,32}$/.test(repoId) || !editSettingsFor(repoId).enabled) return c.notFound();
+  const { config, github, secret } = ready;
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  const session = readGithubSession(c, secret);
+  if (session === null) return c.redirect("/login", 302);
+  const pending: OAuthPending = {
+    state: randomBytes(32).toString("base64url"),
+    verifier: randomBytes(32).toString("base64url"),
+    exp: Date.now() + OAUTH_TTL_MS,
+    purpose: "write",
+    returnTo: safeReturnPath(c.req.query("return"), config.publicUrl ?? ""),
+    sessionKey: sessionKeyOf(session),
+    scope: findActiveRepo(repoId)?.edit.githubWriteScope ?? writeScopeOf(github),
+  };
+  c.header(
+    "set-cookie",
+    serializeCookie(OAUTH_COOKIE, sealOAuthPending(secret, pending), {
+      maxAge: OAUTH_TTL_SECONDS,
+      path: "/auth/github",
+      secure: usesSecureCookie(config.publicUrl),
+    }),
+  );
+  return c.redirect(authorizeUrl(config.publicUrl ?? "", github, pending), 302);
+});
+
+githubRouter.delete("/github/write", (c) => {
+  if (githubReady() === null) return c.notFound();
+  c.header("Cache-Control", "no-store");
+  clearWriteToken(c);
+  return c.body(null, 204);
 });
 
 githubRouter.get("/github/callback", async (c) => {
@@ -120,10 +176,38 @@ githubRouter.get("/github/callback", async (c) => {
   if (c.req.query("error") !== undefined) return stateRejected(c);
   const code = c.req.query("code") ?? "";
   if (!CODE_PATTERN.test(code)) return stateRejected(c);
-  const accessToken = await exchangeCode(github, `${config.publicUrl}/auth/github/callback`, code, pending.verifier);
-  if (accessToken === null) return unavailable(c);
+  // A write grant needs the same signed-in GitHub session that started it.
+  // Checked before the code exchange so a stray write callback costs no GitHub call.
+  let writer: SessionClaims | null = null;
+  if (pending.purpose === "write") {
+    writer = readGithubSession(c, secret);
+    if (writer === null || pending.sessionKey === undefined || !safeEqual(sessionKeyOf(writer), pending.sessionKey)) {
+      return writeRejected(c, "Your board session changed. Sign in again, then retry.");
+    }
+  }
+  const exchanged = await exchangeCode(github, `${config.publicUrl}/auth/github/callback`, code, pending.verifier);
+  if (exchanged === null) return unavailable(c);
+  const accessToken = exchanged.token;
   const login = await fetchLogin(accessToken);
   if (login === null) return unavailable(c);
+  if (writer !== null) {
+    if (login.toLowerCase() !== writer.sub.toLowerCase()) {
+      githubLogger.info("GitHub write grant rejected: login does not match the session");
+      return writeRejected(c, "GitHub signed in as a different account than this board session.");
+    }
+    if (!grantsWrite(exchanged.scope, pending.scope ?? writeScopeOf(github))) {
+      githubLogger.info("GitHub write grant rejected: write scope was not granted");
+      return writeRejected(c, "GitHub did not grant write access.");
+    }
+    let stored: { handle: string; maxAgeSeconds: number };
+    try {
+      stored = storeWriteToken(secret, writer, accessToken);
+    } catch {
+      return unavailable(c);
+    }
+    c.header("set-cookie", writeCookie(stored.handle, stored.maxAgeSeconds), { append: true });
+    return c.redirect(pending.returnTo ?? "/", 302);
+  }
   const decision = await decideAccess(accessToken, login, github);
   if (decision === "error") return unavailable(c);
   if (decision === "deny") {
@@ -154,7 +238,15 @@ githubRouter.get("/github/callback", async (c) => {
 
 export function sealOAuthPending(secret: Buffer, pending: OAuthPending): string {
   const encoded = Buffer.from(
-    JSON.stringify({ state: pending.state, verifier: pending.verifier, exp: pending.exp }),
+    JSON.stringify({
+      state: pending.state,
+      verifier: pending.verifier,
+      exp: pending.exp,
+      purpose: pending.purpose,
+      ...(pending.returnTo === undefined ? {} : { returnTo: pending.returnTo }),
+      ...(pending.sessionKey === undefined ? {} : { sessionKey: pending.sessionKey }),
+      ...(pending.scope === undefined ? {} : { scope: pending.scope }),
+    }),
   ).toString("base64url");
   return signEncoded(secret, encoded);
 }
@@ -176,7 +268,71 @@ export function openOAuthPending(secret: Buffer, token: string, now = Date.now()
   if (typeof state !== "string" || typeof verifier !== "string" || typeof exp !== "number") return null;
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(state) || !/^[A-Za-z0-9_-]{43,128}$/.test(verifier)) return null;
   if (!Number.isSafeInteger(exp) || exp <= now || exp - now > OAUTH_TTL_MS) return null;
-  return { state, verifier, exp };
+  const purpose = record.purpose;
+  if (purpose === "login") {
+    if (record.returnTo !== undefined || record.sessionKey !== undefined || record.scope !== undefined) return null;
+    return { state, verifier, exp, purpose };
+  }
+  if (purpose !== "write") return null;
+  const returnTo = record.returnTo;
+  const sessionKey = record.sessionKey;
+  if (typeof returnTo !== "string" || !isSafeReturnPath(returnTo)) return null;
+  if (typeof sessionKey !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(sessionKey)) return null;
+  const scope = record.scope;
+  if (scope === undefined) return { state, verifier, exp, purpose, returnTo, sessionKey };
+  if (scope !== "repo" && scope !== "public_repo") return null;
+  return { state, verifier, exp, purpose, returnTo, sessionKey, scope };
+}
+
+/**
+ * Only same-origin absolute paths. Anything else (scheme, `//host`, backslashes,
+ * control characters, a different origin after resolution) falls back to `/`.
+ */
+export function safeReturnPath(raw: string | undefined, publicUrl: string): string {
+  if (raw === undefined || !isSafeReturnPath(raw)) return "/";
+  let resolved: URL;
+  try {
+    resolved = new URL(raw, publicUrl);
+    if (resolved.origin !== new URL(publicUrl).origin) return "/";
+  } catch {
+    return "/";
+  }
+  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  return isSafeReturnPath(path) ? path : "/";
+}
+
+function isSafeReturnPath(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_RETURN_LENGTH) return false;
+  if (!value.startsWith("/") || value.startsWith("//")) return false;
+  if (value.includes("\\") || /[^!-~]/.test(value)) return false;
+  return !value.startsWith("/auth/");
+}
+
+function readGithubSession(c: Context<BoardEnv>, secret: Buffer): SessionClaims | null {
+  const token = readCookie(c.req.header("cookie"), SESSION_COOKIE);
+  if (token === null) return null;
+  const claims = verifySession(secret, token, Date.now());
+  if (claims === null || claims.method !== "github") return null;
+  return claims;
+}
+
+function writeScopeOf(github: GithubAuthConfig): GithubWriteScope {
+  return github.writeScope ?? "repo";
+}
+
+/** GitHub reports the granted scopes; the user can deselect them on the consent screen. */
+function grantsWrite(granted: string | null, wanted: GithubWriteScope): boolean {
+  if (granted === null) return false;
+  const scopes = granted.split(/[\s,]+/).filter((scope) => scope.length > 0);
+  if (scopes.includes("repo")) return true;
+  return wanted === "public_repo" && scopes.includes("public_repo");
+}
+
+function writeRejected(c: Context<BoardEnv>, message: string): Response {
+  return c.html(
+    renderAuthHtml("GitHub write access not connected", message, { href: "/", label: "Back to the board" }),
+    403,
+  );
 }
 
 function githubReady(): {
@@ -194,12 +350,18 @@ function authorizeUrl(publicUrl: string, github: GithubAuthConfig, pending: OAut
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", github.clientId);
   url.searchParams.set("redirect_uri", `${publicUrl}/auth/github/callback`);
-  url.searchParams.set("scope", github.allowedOrgs.length > 0 ? "read:user read:org" : "read:user");
+  url.searchParams.set("scope", pending.purpose === "write" && pending.scope !== undefined ? pending.scope : scopeFor(github, pending.purpose));
   url.searchParams.set("state", pending.state);
   url.searchParams.set("code_challenge", createHash("sha256").update(pending.verifier).digest("base64url"));
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("allow_signup", "false");
   return url.toString();
+}
+
+function scopeFor(github: GithubAuthConfig, purpose: OAuthPurpose): string {
+  if (purpose === "write") return writeScopeOf(github);
+  // Login never asks for a write scope.
+  return github.allowedOrgs.length > 0 ? "read:user read:org" : "read:user";
 }
 
 function openPendingCookie(c: Context<BoardEnv>, secret: Buffer): OAuthPending | null {
@@ -241,7 +403,7 @@ async function exchangeCode(
   redirectUri: string,
   code: string,
   verifier: string,
-): Promise<string | null> {
+): Promise<{ token: string; scope: string | null } | null> {
   try {
     const response = await fetch(TOKEN_URL, {
       method: "POST",
@@ -270,7 +432,8 @@ async function exchangeCode(
       githubLogger.info("GitHub login failed");
       return null;
     }
-    return token;
+    const scope = (payload as { scope?: unknown }).scope;
+    return { token, scope: typeof scope === "string" ? scope : null };
   } catch {
     githubLogger.info("GitHub login failed");
     return null;

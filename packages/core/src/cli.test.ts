@@ -45,6 +45,7 @@ describe("snoboard cli", () => {
       "--project",
       "--title",
       "--priority",
+      "--dry-run",
       "--version",
       "--help",
     ]) {
@@ -56,6 +57,7 @@ describe("snoboard cli", () => {
     expect((await run(["nope"])).code).toBe(2);
     expect((await run([])).code).toBe(2);
     expect((await run(["validate", "--ready"])).code).toBe(2);
+    expect((await run(["validate", "--dry-run"])).code).toBe(2);
     expect((await run(["--not-a-flag"])).code).toBe(2);
   });
 

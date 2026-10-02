@@ -1,12 +1,31 @@
 import { readFileSync } from "node:fs";
+import { resetAccessKeyCache, startAccessCertRefresh, stopAccessCertRefresh } from "./cloudflare-access.js";
 
-export type AuthMode = "password" | "github" | "none";
+export type AuthMode = "password" | "github" | "none" | "cloudflare-access";
 
 export type GithubAuthConfig = {
   clientId: string;
   clientSecret: string;
   allowedLogins: readonly string[];
   allowedOrgs: readonly string[];
+  /** OAuth scope for the separate write grant. Default `repo`; `public_repo` for public repositories only. */
+  writeScope?: GithubWriteScope;
+};
+
+export type GithubWriteScope = "repo" | "public_repo";
+
+export type CloudflareAccessConfig = {
+  teamDomain: string;
+  audiences: readonly string[];
+  allowedEmails: readonly string[];
+  allowedEmailDomains: readonly string[];
+  allowedGroups: readonly string[];
+};
+
+export type PublicAuthView = {
+  password: boolean;
+  github: boolean;
+  cloudflareAccess: boolean;
 };
 
 export type AuthConfig = {
@@ -15,9 +34,16 @@ export type AuthConfig = {
   sessionSecret?: Buffer;
   passwordHash?: string;
   github?: GithubAuthConfig;
+  cloudflareAccess?: CloudflareAccessConfig;
 };
 
-const MODE_VALUES = new Set<AuthMode>(["password", "github", "none"]);
+const MODE_VALUES = new Set<AuthMode>(["password", "github", "none", "cloudflare-access"]);
+const TEAM_DOMAIN_PATTERN =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+cloudflareaccess\.com$/;
+const EMAIL_PATTERN = /^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const AUDIENCE_PATTERN = /^[\x21-\x7E]{1,256}$/;
+const GROUP_PATTERN = /^[\x20-\x7E]{1,128}$/;
 const NAME_PATTERN = /^[A-Za-z0-9-]{1,39}$/;
 const CLIENT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
@@ -36,22 +62,27 @@ export function setAuthConfig(config: AuthConfig): void {
 }
 
 export function resetAuthConfig(): void {
+  stopAccessCertRefresh();
+  resetAccessKeyCache();
   active = unconfiguredAuth();
 }
 
-export function getPublicAuthView(): { password: boolean; github: boolean } {
+export function getPublicAuthView(): PublicAuthView {
   return {
     password: active.modes.includes("password"),
     github: active.modes.includes("github"),
+    cloudflareAccess: active.modes.includes("cloudflare-access"),
   };
 }
 
 export function bootAuth(env: NodeJS.ProcessEnv): void {
+  stopAccessCertRefresh();
   if (env.VITEST === "true") {
     active = unconfiguredAuth();
     return;
   }
   active = loadAuthConfig(env);
+  if (active.cloudflareAccess !== undefined) startAccessCertRefresh(active.cloudflareAccess);
 }
 
 export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
@@ -61,6 +92,9 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
       invalid("SNOBOARD_AUTH_ALLOW_NONE must be true when none is configured");
     }
     return { modes, publicUrl: optionalPublicUrl(env.SNOBOARD_PUBLIC_URL) };
+  }
+  if (modes.includes("cloudflare-access")) {
+    return { modes, cloudflareAccess: readCloudflareAccess(env) };
   }
 
   const needsSession = modes.includes("password") || modes.includes("github");
@@ -93,6 +127,9 @@ function parseModes(raw: string | undefined): AuthMode[] {
   if (modes.length === 0) invalid("SNOBOARD_AUTH_MODES is empty");
   if (modes.includes("none") && modes.length > 1) {
     invalid("SNOBOARD_AUTH_MODES: none cannot be combined with other modes");
+  }
+  if (modes.includes("cloudflare-access") && modes.length > 1) {
+    invalid("SNOBOARD_AUTH_MODES: cloudflare-access cannot be combined with other modes");
   }
   return modes;
 }
@@ -129,8 +166,88 @@ function readPasswordHash(filePath: string | undefined): string {
   return hash;
 }
 
+function readCloudflareAccess(env: NodeJS.ProcessEnv): CloudflareAccessConfig {
+  const teamDomain = readTeamDomain(env.SNOBOARD_CF_ACCESS_TEAM_DOMAIN);
+  const audiences = parseCommaList(env.SNOBOARD_CF_ACCESS_AUD, "SNOBOARD_CF_ACCESS_AUD", normalizeAudience);
+  if (audiences.length === 0) invalid("SNOBOARD_CF_ACCESS_AUD is required");
+  const allowedEmails = parseCommaList(env.SNOBOARD_ALLOWED_EMAILS, "SNOBOARD_ALLOWED_EMAILS", normalizeEmail);
+  const allowedEmailDomains = parseCommaList(
+    env.SNOBOARD_ALLOWED_EMAIL_DOMAINS,
+    "SNOBOARD_ALLOWED_EMAIL_DOMAINS",
+    normalizeDomain,
+  );
+  const allowedGroups = parseCommaList(
+    env.SNOBOARD_CF_ACCESS_ALLOWED_GROUPS,
+    "SNOBOARD_CF_ACCESS_ALLOWED_GROUPS",
+    normalizeGroup,
+  );
+  // Access tokens carry `groups` only when the IdP is configured to send them, so groups
+  // cannot be the sole allowlist: a groups-only config would lock everyone out.
+  if (allowedEmails.length === 0 && allowedEmailDomains.length === 0) {
+    invalid("Cloudflare Access requires SNOBOARD_ALLOWED_EMAILS or SNOBOARD_ALLOWED_EMAIL_DOMAINS");
+  }
+  return { teamDomain, audiences, allowedEmails, allowedEmailDomains, allowedGroups };
+}
+
+function readTeamDomain(value: string | undefined): string {
+  if (value === undefined || value.trim() === "") invalid("SNOBOARD_CF_ACCESS_TEAM_DOMAIN is required");
+  const domain = value.trim().toLowerCase();
+  if (domain.includes("://") || domain.includes("/") || domain.includes(":") || domain.includes("@")) {
+    invalid("SNOBOARD_CF_ACCESS_TEAM_DOMAIN must be a hostname");
+  }
+  if (!TEAM_DOMAIN_PATTERN.test(domain)) {
+    invalid("SNOBOARD_CF_ACCESS_TEAM_DOMAIN must end in .cloudflareaccess.com");
+  }
+  return domain;
+}
+
+function normalizeAudience(value: string): string | null {
+  if (!AUDIENCE_PATTERN.test(value)) return null;
+  return value;
+}
+
+function normalizeEmail(value: string): string | null {
+  const email = value.toLowerCase();
+  if (!EMAIL_PATTERN.test(email)) return null;
+  return email;
+}
+
+function normalizeDomain(value: string): string | null {
+  const domain = value.toLowerCase();
+  if (!DOMAIN_PATTERN.test(domain)) return null;
+  return domain;
+}
+
+function normalizeGroup(value: string): string | null {
+  if (!GROUP_PATTERN.test(value)) return null;
+  return value.toLowerCase();
+}
+
+function parseCommaList(
+  value: string | undefined,
+  label: string,
+  normalize: (part: string) => string | null,
+): string[] {
+  if (value === undefined || value.trim() === "") return [];
+  const items: string[] = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0) continue;
+    const normalized = normalize(trimmed);
+    if (normalized === null) invalid(`${label} contains an invalid value`);
+    if (items.length >= 32) invalid(`${label} has too many values`);
+    if (!items.includes(normalized)) items.push(normalized);
+  }
+  return items;
+}
+
 function readGithub(env: NodeJS.ProcessEnv): GithubAuthConfig {
-  const clientId = env.SNOBOARD_GITHUB_CLIENT_ID?.trim() ?? "";
+  // The client id is not secret, but secret stores (Vault Agent, k8s secrets)
+  // deliver files, so SNOBOARD_GITHUB_CLIENT_ID_FILE is accepted as well.
+  const clientId =
+    env.SNOBOARD_GITHUB_CLIENT_ID_FILE !== undefined && env.SNOBOARD_GITHUB_CLIENT_ID_FILE.trim() !== ""
+      ? readText(env.SNOBOARD_GITHUB_CLIENT_ID_FILE, "SNOBOARD_GITHUB_CLIENT_ID_FILE")
+      : (env.SNOBOARD_GITHUB_CLIENT_ID?.trim() ?? "");
   if (!CLIENT_ID_PATTERN.test(clientId)) invalid("SNOBOARD_GITHUB_CLIENT_ID is invalid");
   const clientSecret = readText(env.SNOBOARD_GITHUB_CLIENT_SECRET_FILE, "SNOBOARD_GITHUB_CLIENT_SECRET_FILE");
   if (clientSecret.length < 8 || clientSecret.length > 512) {
@@ -141,7 +258,15 @@ function readGithub(env: NodeJS.ProcessEnv): GithubAuthConfig {
   if (allowedLogins.length === 0 && allowedOrgs.length === 0) {
     invalid("GitHub login requires SNOBOARD_ALLOWED_GITHUB_LOGINS or SNOBOARD_ALLOWED_GITHUB_ORGS");
   }
-  return { clientId, clientSecret, allowedLogins, allowedOrgs };
+  const writeScope = readWriteScope(env.SNOBOARD_GITHUB_WRITE_SCOPE);
+  return { clientId, clientSecret, allowedLogins, allowedOrgs, writeScope };
+}
+
+function readWriteScope(value: string | undefined): GithubWriteScope {
+  const scope = value?.trim() ?? "";
+  if (scope === "" || scope === "repo") return "repo";
+  if (scope === "public_repo") return "public_repo";
+  invalid("SNOBOARD_GITHUB_WRITE_SCOPE must be repo or public_repo");
 }
 
 function parseNameList(value: string | undefined, label: string): string[] {

@@ -33,6 +33,9 @@ export function InitiativeFrontmatterSchema(config: Config) {
       branch: z.string().min(1).optional(),
       updated: z.iso.date(),
       labels: z.array(z.string().min(1)).optional(),
+      issues: z.array(z.string()).optional(),
+      // Shape only; `validate` reports bad titles and URLs so the initiative still shows.
+      links: z.array(z.object({ title: z.string(), url: z.string() }).passthrough()).optional(),
       phases: z.array(PhaseSchema(config)).optional(),
     })
     .passthrough();

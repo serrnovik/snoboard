@@ -3,10 +3,19 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "snoboard";
 import { createBareClone, createTmpRepo, type TmpRepo } from "../../../packages/core/src/test-utils/tmp-repo.ts";
 import { app } from "./index.js";
 import { loadBoardEnv } from "./env.js";
-import { createRepoSync, requestRefresh, type Logger, type RepoSyncController } from "./repo-sync.js";
+import {
+  cloneCredentialArgs,
+  createRepoSync,
+  refspecsFor,
+  requestRefresh,
+  startRepoSyncs,
+  type Logger,
+  type RepoSyncController,
+} from "./repo-sync.js";
 import { getSnapshot, getStatus, resetStore } from "./store.js";
 
 const CONFIG = `root: initiatives
@@ -248,6 +257,8 @@ describe("repo sync", () => {
         expect(gitConfig).toContain("[credential]");
         expect(gitConfig).toContain("git-credential-helper.mjs");
         expect(gitConfig).toContain("IdentitiesOnly=yes");
+        expect(gitConfig).toContain("UserKnownHostsFile=");
+        expect(gitConfig).toContain("BatchMode=yes");
         expect(gitConfig).toContain("StrictHostKeyChecking=accept-new");
         expect(gitConfig).not.toContain(token);
         expect(gitConfig).not.toContain(keyMaterial);
@@ -325,6 +336,104 @@ describe("repo sync", () => {
     },
     90_000,
   );
+});
+
+describe("per-repo sync", () => {
+  it(
+    "keeps a failing repository from blocking another, refreshes one, and uses separate data dirs",
+    async () => {
+      const { repo, bareDir, dataDir } = await setupRemote();
+      resetStore();
+      const missing = path.join(os.tmpdir(), `snoboard-missing-${Date.now()}`);
+      // Hold beta's staggered auto-start instead of letting it fire mid-test: it would
+      // re-run the failed clone and rewrite lastErrorAt. The test drives refreshes itself.
+      const realSetTimeout = globalThis.setTimeout;
+      const heldStarts: Array<() => void> = [];
+      const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+        if (delay === 250) {
+          heldStarts.push(callback);
+          return realSetTimeout(() => {}, 0);
+        }
+        return realSetTimeout(callback, delay);
+      }) as typeof setTimeout);
+      const syncs = startRepoSyncs(
+        [
+          { id: "alpha", name: "Alpha", url: bareDir, edit: { modes: [] } },
+          { id: "beta", name: "Beta", url: missing, edit: { modes: [] } },
+        ],
+        { dataDir, refreshSeconds: 3600, staggerMs: 250 },
+      );
+      cleanups.push(async () => {
+        for (const sync of syncs) sync.stop();
+      });
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), 250);
+      spy.mockRestore();
+      expect(heldStarts).toHaveLength(1);
+
+      const alpha = syncs[0];
+      const beta = syncs[1];
+      if (alpha === undefined || beta === undefined) throw new Error("expected two sync controllers");
+      expect(alpha.repoDir).toBe(path.join(path.resolve(dataDir, "alpha"), "repo"));
+      expect(beta.repoDir).toBe(path.join(path.resolve(dataDir, "beta"), "repo"));
+      expect(alpha.repoDir).not.toBe(beta.repoDir);
+
+      await Promise.all([alpha.requestRefresh(), beta.requestRefresh()]);
+
+      expect(getStatus("alpha").lastError).toBeNull();
+      expect(getSnapshot("alpha")?.items.map((item) => item.id)).toEqual(["acme-001"]);
+      expect(getSnapshot("beta")).toBeNull();
+      expect(getStatus("beta").lastError).toEqual(expect.any(String));
+      expect(getStatus("beta").lastError?.length).toBeGreaterThan(0);
+      expect((await stat(path.join(alpha.repoDir, ".git"))).isDirectory()).toBe(true);
+      expect((await stat(path.dirname(beta.repoDir))).isDirectory()).toBe(true);
+      expect((await app.request("/readyz")).status).toBe(200);
+
+      const betaErrorAt = getStatus("beta").lastErrorAt;
+      const betaError = getStatus("beta").lastError;
+      await repo.commit({
+        branch: "main",
+        message: "Add reports",
+        files: {
+          "initiatives/acme/009-reports/initiative.md": initiative("acme-009", "Reports", "planned"),
+        },
+      });
+      await runGit(repo.dir, ["push", bareDir, "main"]);
+      await requestRefresh("alpha");
+
+      expect(getSnapshot("alpha")?.items.map((item) => item.id)).toContain("acme-009");
+      expect(getSnapshot("beta")).toBeNull();
+      expect(getStatus("beta").lastError).toBe(betaError);
+      expect(getStatus("beta").lastErrorAt).toBe(betaErrorAt);
+      expect(getStatus("alpha").refreshing).toBe(false);
+      expect(getStatus("beta").refreshing).toBe(false);
+    },
+    90_000,
+  );
+});
+
+describe("cloneCredentialArgs", () => {
+  it("does not install a credential helper for public https or local paths", () => {
+    expect(cloneCredentialArgs("https://example.com/acme/board.git", undefined, "/tmp/helper.mjs")).toEqual([
+      "-c",
+      "credential.helper=",
+    ]);
+    expect(cloneCredentialArgs("file:///repos/board.git", undefined, "/tmp/helper.mjs")).toEqual([]);
+    const withToken = cloneCredentialArgs("https://example.com/acme/board.git", "/secrets/token", "/tmp/helper.mjs");
+    expect(withToken[0]).toBe("-c");
+    expect(withToken[1]).toContain("credential.helper=");
+    expect(withToken[1]).toContain("helper.mjs");
+    expect(withToken.join("\n")).not.toContain("ghp_");
+  });
+});
+
+describe("refspecsFor", () => {
+  it("fetches snoboard edit branches in addition to initiative branches", () => {
+    const specs = refspecsFor(loadConfig('branchPatterns: ["tickets/*"]\n'));
+    expect(specs).toContain("+refs/heads/main:refs/remotes/origin/main");
+    expect(specs).toContain("+refs/heads/tickets/*:refs/remotes/origin/tickets/*");
+    expect(specs).toContain("+refs/heads/snoboard/edits-*:refs/remotes/origin/snoboard/edits-*");
+    expect(specs).not.toContain("+refs/heads/*:refs/remotes/origin/*");
+  });
 });
 
 describe("redactSecrets", () => {
