@@ -12,7 +12,7 @@ import { app } from "../index.js";
 import { resetForgeCache } from "../forge/github.js";
 import { resetActiveRepos, setActiveRepos, type RepoConfig } from "../repos-config.js";
 import { resetStore, seedStore } from "../store.js";
-import { rememberedIssueCount, resetIssueSetup } from "./setup.js";
+import { boardIssueLinks, fetchInitiativeIssues, rememberedIssueCount, resetIssueSetup } from "./setup.js";
 import { ISSUE_CACHE_TTL_MS } from "./registry.js";
 
 const sessionSecret = randomBytes(32);
@@ -158,6 +158,20 @@ describe("per-repo issue providers", () => {
       { raw: "vikunja:34", title: "", state: "unknown", url: "" },
     ]);
     expect(JSON.stringify(issues)).not.toContain(githubToken);
+  });
+
+  it("links Forgejo refs without a token and never calls Forgejo", async () => {
+    setActiveRepos([repoConfig("acme", { forgejo: { baseUrl: "https://forge.example.com", repo: "acme/widgets" } })]);
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(boardIssueLinks("acme", ["fj#12", "fj:other/thing#3"])).toEqual([
+      { raw: "fj#12", url: "https://forge.example.com/acme/widgets/issues/12" },
+      { raw: "fj:other/thing#3", url: "https://forge.example.com/other/thing/issues/3" },
+    ]);
+    expect(await fetchInitiativeIssues("acme", ["fj#12"])).toEqual([
+      { raw: "fj#12", title: "", state: "unknown", url: "https://forge.example.com/acme/widgets/issues/12" },
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("links Vikunja tasks without a token and never calls Vikunja", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import type { BoardItem, Edit, Phase } from "snoboard/browser";
+import type { BoardItem, Edit, IssueLinkConfig, Phase } from "snoboard/browser";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +43,7 @@ function EditForm({
   item: BoardItem;
   statuses: readonly string[];
   priorities: readonly string[];
-  issueLinks: { vikunjaBaseUrl?: string; githubRepo?: string };
+  issueLinks: IssueLinkConfig;
 }) {
   const basket = useBasket(useRepoId());
   const formId = useId();

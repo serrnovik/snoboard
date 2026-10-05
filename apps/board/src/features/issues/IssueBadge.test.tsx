@@ -41,6 +41,23 @@ describe("issue badge", () => {
     expect(link.querySelector("svg")).toBeTruthy();
   });
 
+  it("links a Forgejo ref with its own icon", () => {
+    render(
+      <>
+        <IssueBadge issue={issue({ raw: "fj#12", state: "unknown", url: "https://forge.example.com/acme/widgets/issues/12" })} />
+        <IssueBadge issue={issue({ raw: "gh#12", state: "unknown", url: "https://github.com/acme/widgets/issues/12" })} />
+      </>,
+    );
+    const [forgejo, github] = screen.getAllByTestId("issue-link");
+    expect(forgejo?.getAttribute("href")).toBe("https://forge.example.com/acme/widgets/issues/12");
+    expect(forgejo?.getAttribute("target")).toBe("_blank");
+    expect(forgejo?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(forgejo?.getAttribute("data-provider")).toBe("fj");
+    const icon = (element: Element | undefined) => element?.querySelector("svg")?.getAttribute("class") ?? "";
+    expect(icon(forgejo)).toContain("git-branch");
+    expect(icon(forgejo)).not.toBe(icon(github));
+  });
+
   it("colors a closed issue differently from an open one", () => {
     render(
       <IssueBadge

@@ -22,13 +22,13 @@ initiatives/<project>/<NNN>-<slug>/initiative.md
 | `branch` | no | Non-empty string |
 | `updated` | yes | Calendar date `YYYY-MM-DD` |
 | `labels` | no | List of non-empty strings |
-| `issues` | no | List of at most 30 issue refs. Each entry is `gh#123`, `gh:owner/name#123`, `vj:456` (alias `vikunja:456`), or `<provider>:<key>` |
+| `issues` | no | List of at most 30 issue refs. Each entry is `gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456` (alias `vikunja:456`), or `<provider>:<key>` |
 | `links` | no | List of at most 20 external links: `{ title, url }`. See [Links](#links) |
 | `phases` | no | List of phase objects |
 
 A dependency is either an initiative id (`acme-002`) or an initiative id plus a phase (`acme-001#2`). The phase number has no leading zeros.
 
-`issues` lists related tracker items. `gh#123` is an issue in the configured GitHub repository. `gh:owner/name#123` names that repository. `vj:456` is a Vikunja task id; `vikunja:456` is accepted as an alias, and the board editor stores new entries as `vj:456`. Any other `<provider>:<key>` is kept and reported as an unknown provider.
+`issues` lists related tracker items. `gh#123` is an issue in the configured GitHub repository. `gh:owner/name#123` names that repository. `fj#123` is an issue or pull request in the configured Forgejo repository, and `fj:owner/name#123` names another repository on the same Forgejo site. `vj:456` is a Vikunja task id; `vikunja:456` is accepted as an alias, and the board editor stores new entries as `vj:456`. Any other `<provider>:<key>` is kept and reported as an unknown provider.
 
 The board can edit this list (details panel, **Issues**). Each new ref is checked with the same parser as
 validation; a ref that does not parse is refused before it reaches the basket.
@@ -91,7 +91,7 @@ Validation reports each problem as `{ path, field, message, severity }`. Severit
 - **Error:** an `issues` entry is not a valid ref.
 - **Error:** more than 30 `issues` entries.
 - **Error:** more than 20 `links`, or a link with an empty or too long title, or a URL that is not `https:` or `mailto:`.
-- **Warning:** an `issues` entry uses a provider other than `gh`, `vj` or `vikunja`.
+- **Warning:** an `issues` entry uses a provider other than `gh`, `fj`, `vj` or `vikunja`.
 - **Warning:** an `issues` entry is repeated.
 
 ## Example

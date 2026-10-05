@@ -176,6 +176,45 @@ describe("loadReposConfig", () => {
     expect(() => loadReposConfig({ SNOBOARD_REPOS_FILE: bad })).toThrow(/vikunja baseUrl must be an https URL/);
   });
 
+  it("accepts a Forgejo block and validates baseUrl and repo", async () => {
+    const dir = await tempDir();
+    const ok = await writeRepos(
+      dir,
+      `repos:
+  - id: acme
+    name: Acme
+    url: https://example.com/acme.git
+    issues:
+      forgejo: { baseUrl: https://forge.example.com, repo: acme/widgets, tokenFile: /secrets/forgejo-token }
+`,
+    );
+    expect(loadReposConfig({ SNOBOARD_REPOS_FILE: ok })[0]?.issues).toEqual({
+      forgejo: { baseUrl: "https://forge.example.com", repo: "acme/widgets", tokenFile: "/secrets/forgejo-token" },
+    });
+    const http = await writeRepos(
+      dir,
+      `repos:
+  - id: acme
+    name: Acme
+    url: https://example.com/acme.git
+    issues:
+      forgejo: { baseUrl: http://forge.example.com, repo: acme/widgets }
+`,
+    );
+    expect(() => loadReposConfig({ SNOBOARD_REPOS_FILE: http })).toThrow(/forgejo baseUrl must be an https URL/);
+    const badRepo = await writeRepos(
+      dir,
+      `repos:
+  - id: acme
+    name: Acme
+    url: https://example.com/acme.git
+    issues:
+      forgejo: { baseUrl: https://forge.example.com, repo: acme }
+`,
+    );
+    expect(() => loadReposConfig({ SNOBOARD_REPOS_FILE: badRepo })).toThrow(/forgejo repo must be owner\/name/);
+  });
+
   it("rejects a repository id outside [a-z0-9-]{1,32}", async () => {
     const dir = await tempDir();
     const file = await writeRepos(

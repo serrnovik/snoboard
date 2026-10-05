@@ -70,6 +70,20 @@ describe("issues editor", () => {
     expect(issueRefProblem("https://evil.example.org/tasks/45", [], config)).toMatch(/is not this repository's/);
   });
 
+  it("turns pasted Forgejo URLs into fj refs and detects duplicates", () => {
+    const config = { forgejoBaseUrl: "https://forge.example.com", forgejoRepo: "acme/board" };
+    expect(issueRefInput("https://forge.example.com/acme/board/issues/12", config)).toEqual({ ref: "fj#12" });
+    expect(issueRefInput("https://forge.example.com/acme/board/pulls/4", config)).toEqual({ ref: "fj#4" });
+    expect(issueRefInput("https://forge.example.com/other/repo/issues/8", config)).toEqual({ ref: "fj:other/repo#8" });
+    expect(issueRefProblem("https://evil.example.org/acme/board/issues/12", [], config)).toMatch(
+      /is not this repository's/,
+    );
+    expect(issueRefProblem("https://forge.example.com/acme/board/issues/12", ["fj#12"], config)).toMatch(
+      /fj#12 is already listed/,
+    );
+    expect(issueRefProblem("fj#abc", [])).toMatch(/fj#12/);
+  });
+
   it("adds a pasted URL as its short form and links chips without a fetched state", async () => {
     const user = userEvent.setup();
     const basket = renderHook(() => useBasket());

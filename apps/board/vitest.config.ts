@@ -17,5 +17,7 @@ export default defineConfig({
   test: {
     include: ["server/**/*.test.ts", "src/**/*.test.ts", "src/**/*.test.tsx"],
     fileParallelism: false,
+    // Server tests build real git repos; 5s is too tight on a loaded machine (as in packages/core).
+    testTimeout: 20_000,
   },
 });

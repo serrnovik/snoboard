@@ -10,6 +10,7 @@ import {
   type EditSettings,
 } from "./edit-env.js";
 import { loadBoardEnv } from "./env.js";
+import { forgejoBase, forgejoRepo } from "./issues/forgejo.js";
 import { vikunjaBase } from "./issues/vikunja.js";
 
 const REPO_ID = /^[a-z0-9-]{1,32}$/;
@@ -39,6 +40,8 @@ export type RepoIssuesConfig = {
   github?: { repo: string };
   /** Without `tokenFile`, refs link to the site and state stays unknown (no API calls). */
   vikunja?: { baseUrl: string; tokenFile?: string };
+  /** `fj#n` means `repo` on `baseUrl`. Without `tokenFile`, refs only link (no API calls). */
+  forgejo?: { baseUrl: string; repo: string; tokenFile?: string };
 };
 
 export type RepoConfig = {
@@ -73,6 +76,14 @@ const IssuesSchema = z
     vikunja: z
       .object({
         baseUrl: z.string().min(1),
+        tokenFile: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    forgejo: z
+      .object({
+        baseUrl: z.string().min(1),
+        repo: z.string().min(1),
         tokenFile: z.string().min(1).optional(),
       })
       .strict()
@@ -235,6 +246,13 @@ function reposFromFile(file: string): RepoConfig[] {
       if (vikunjaBase(issues.vikunja.baseUrl) === undefined) {
         invalid("vikunja baseUrl must be an https URL (http only for localhost)");
       }
+    }
+    if (issues?.forgejo !== undefined) {
+      assertNoEmbeddedCredentials(issues.forgejo.baseUrl, "forgejo baseUrl");
+      if (forgejoBase(issues.forgejo.baseUrl) === undefined) {
+        invalid("forgejo baseUrl must be an https URL (http only for localhost)");
+      }
+      if (forgejoRepo(issues.forgejo.repo) === undefined) invalid("forgejo repo must be owner/name");
     }
     const repo: RepoConfig = {
       id: entry.id,

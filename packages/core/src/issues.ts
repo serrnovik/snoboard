@@ -5,21 +5,23 @@ export type IssueRef = {
 };
 
 export type ParsedIssueRef = IssueRef & {
-  /** False when the prefix is not `gh`, `vj` or `vikunja`. The ref is still syntactically valid. */
+  /** False when the prefix is not `gh`, `fj`, `vj` or `vikunja`. The ref is still syntactically valid. */
   known: boolean;
 };
 
 const GH_NUMBER = /^gh#([1-9]\d*)$/;
 const GH_QUALIFIED = /^gh:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
+const FJ_NUMBER = /^fj#([1-9]\d*)$/;
+const FJ_QUALIFIED = /^fj:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
 const VIKUNJA = /^(?:vj|vikunja):([1-9]\d*)$/;
-const KNOWN_PREFIX = /^(?:gh#|gh:|vj:|vikunja:)/;
+const KNOWN_PREFIX = /^(?:gh#|gh:|fj#|fj:|vj:|vikunja:)/;
 const GENERIC = /^([a-z][a-z0-9_-]*):([^\s]+)$/;
 
 function parsed(provider: string, key: string, raw: string, known: boolean): ParsedIssueRef {
   return { provider, key, raw, known };
 }
 
-/** Parses `gh#123`, `gh:owner/name#123`, `vj:456` (alias `vikunja:456`), or a generic `provider:key`. */
+/** Parses `gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456` (alias `vikunja:456`), or a generic `provider:key`. */
 export function parseIssueRef(text: string): ParsedIssueRef | undefined {
   const ghNumber = GH_NUMBER.exec(text);
   if (ghNumber?.[1]) return parsed("gh", ghNumber[1], text, true);
@@ -27,6 +29,14 @@ export function parseIssueRef(text: string): ParsedIssueRef | undefined {
   const ghQualified = GH_QUALIFIED.exec(text);
   if (ghQualified?.[1] && ghQualified[2]) {
     return parsed("gh", `${ghQualified[1]}#${ghQualified[2]}`, text, true);
+  }
+
+  const fjNumber = FJ_NUMBER.exec(text);
+  if (fjNumber?.[1]) return parsed("fj", fjNumber[1], text, true);
+
+  const fjQualified = FJ_QUALIFIED.exec(text);
+  if (fjQualified?.[1] && fjQualified[2]) {
+    return parsed("fj", `${fjQualified[1]}#${fjQualified[2]}`, text, true);
   }
 
   const vikunja = VIKUNJA.exec(text);
@@ -55,12 +65,17 @@ export type IssueLinkConfig = {
   vikunjaBaseUrl?: string;
   /** GitHub `owner/name` that `gh#123` points at. */
   githubRepo?: string;
+  /** Forgejo site, for example `https://forge.example.com`. */
+  forgejoBaseUrl?: string;
+  /** Forgejo `owner/name` that `fj#123` points at. */
+  forgejoRepo?: string;
 };
 
 export type IssueUrlResult = { ref: string } | { error: string };
 
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GITHUB_ISSUE_PATH = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d*)\/?$/;
+const FORGEJO_ISSUE_PATH = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(?:issues|pulls)\/([1-9]\d*)\/?$/;
 const VIKUNJA_TASK_PATH = /^\/tasks\/([1-9]\d*)\/?$/;
 
 function parseUrl(text: string): URL | undefined {
@@ -87,6 +102,8 @@ export function issueBaseUrl(value: string | undefined): string | undefined {
 /**
  * Turns a pasted tracker URL into a short ref. Returns undefined when `text` is not a URL.
  * A GitHub issue or pull request becomes `gh#12` for the configured repo, else `gh:owner/name#12`.
+ * A Forgejo issue or pull request on the configured Forgejo site becomes `fj#12` for the configured repo,
+ * else `fj:owner/name#12`.
  * A Vikunja task becomes `vj:45` only when it is on the configured Vikunja site.
  */
 export function issueRefFromUrl(text: string, config: IssueLinkConfig = {}): IssueUrlResult | undefined {
@@ -99,6 +116,21 @@ export function issueRefFromUrl(text: string, config: IssueLinkConfig = {}): Iss
     const own = config.githubRepo !== undefined && repo.toLowerCase() === config.githubRepo.trim().toLowerCase();
     return { ref: own ? `gh#${match[3]}` : `gh:${repo}#${match[3]}` };
   }
+  const forgejo = issueBaseUrl(config.forgejoBaseUrl);
+  if (forgejo !== undefined) {
+    const baseUrl = new URL(forgejo);
+    if (url.origin.toLowerCase() === baseUrl.origin.toLowerCase()) {
+      const prefix = trimSlash(baseUrl.pathname);
+      const path = url.pathname.startsWith(`${prefix}/`) ? url.pathname.slice(prefix.length) : undefined;
+      const match = path === undefined ? null : FORGEJO_ISSUE_PATH.exec(path);
+      if (match?.[1] && match[2] && match[3]) {
+        const repo = `${match[1]}/${match[2]}`;
+        const own = config.forgejoRepo !== undefined && repo.toLowerCase() === config.forgejoRepo.trim().toLowerCase();
+        return { ref: own ? `fj#${match[3]}` : `fj:${repo}#${match[3]}` };
+      }
+      return { error: "Use a Forgejo issue or pull request URL like /owner/name/issues/12." };
+    }
+  }
   const base = issueBaseUrl(config.vikunjaBaseUrl);
   if (base !== undefined) {
     const baseUrl = new URL(base);
@@ -110,7 +142,7 @@ export function issueRefFromUrl(text: string, config: IssueLinkConfig = {}): Iss
       return { error: "Use a Vikunja task URL like /tasks/45." };
     }
   }
-  return { error: `${url.host} is not this repository's GitHub or Vikunja site.` };
+  return { error: `${url.host} is not this repository's GitHub, Forgejo or Vikunja site.` };
 }
 
 /** Browser link for a ref, built from config only. Empty when it cannot be built. */
@@ -122,6 +154,13 @@ export function issueLinkFor(raw: string, config: IssueLinkConfig = {}): string 
     return base === undefined ? "" : `${base}/tasks/${ref.key}`;
   }
   const hash = ref.key.lastIndexOf("#");
+  if (ref.provider === "fj") {
+    const base = issueBaseUrl(config.forgejoBaseUrl);
+    const repo = hash > 0 ? ref.key.slice(0, hash) : config.forgejoRepo?.trim();
+    const number = hash > 0 ? ref.key.slice(hash + 1) : ref.key;
+    if (base === undefined || repo === undefined || !GITHUB_REPO.test(repo)) return "";
+    return `${base}/${repo}/issues/${number}`;
+  }
   const repo = hash > 0 ? ref.key.slice(0, hash) : config.githubRepo?.trim();
   const number = hash > 0 ? ref.key.slice(hash + 1) : ref.key;
   if (repo === undefined || !GITHUB_REPO.test(repo)) return "";

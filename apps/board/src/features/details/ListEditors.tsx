@@ -21,7 +21,7 @@ type Link = { title: string; url: string };
 
 /**
  * The ref to store for typed or pasted `text`: tracker URLs become short refs
- * (`gh#12`, `gh:owner/name#12`, `vj:45`) and `vikunja:45` becomes `vj:45`.
+ * (`gh#12`, `gh:owner/name#12`, `fj#12`, `fj:owner/name#12`, `vj:45`) and `vikunja:45` becomes `vj:45`.
  */
 export function issueRefInput(text: string, config: IssueLinkConfig = {}): { ref: string } | { error: string } {
   const fromUrl = issueRefFromUrl(text, config);
@@ -35,7 +35,7 @@ export function issueRefProblem(text: string, current: readonly string[], config
   const input = issueRefInput(text, config);
   if ("error" in input) return input.error;
   const ref = input.ref;
-  if (parseIssueRef(ref) === undefined) return "Use gh#12, gh:owner/name#12, vj:45, a tracker URL or provider:key.";
+  if (parseIssueRef(ref) === undefined) return "Use gh#12, gh:owner/name#12, fj#12, fj:owner/name#12, vj:45, a tracker URL or provider:key.";
   if (current.some((entry) => normalizeIssueRef(entry) === ref)) return `${ref} is already listed.`;
   if (current.length >= MAX_ISSUE_REFS) return `At most ${MAX_ISSUE_REFS} issue refs.`;
   return undefined;
@@ -99,7 +99,7 @@ export function IssuesEditor({
         <Input
           id={inputId}
           aria-label="Add issue ref"
-          placeholder="gh#12, vj:45 or paste an issue URL"
+          placeholder="gh#12, fj#12, vj:45 or paste an issue URL"
           value={draft}
           autoComplete="off"
           spellCheck={false}

@@ -714,6 +714,20 @@ describe("repo-namespaced API", () => {
     expect(widgets.issues).toEqual({});
   });
 
+  it("exposes Forgejo link settings without the token", async () => {
+    setActiveRepos([
+      {
+        ...repoConfig("acme", "Acme platform", { modes: ["pr"] }),
+        issues: {
+          forgejo: { baseUrl: "https://forge.example.com/", repo: "acme/widgets", tokenFile: "/secrets/forgejo-token" },
+        },
+      },
+    ]);
+    const acme = (await (await app.request("/api/repos/acme/edit-config", authed())).json()) as { issues: unknown };
+    expect(acme.issues).toEqual({ forgejoBaseUrl: "https://forge.example.com", forgejoRepo: "acme/widgets" });
+    expect(JSON.stringify(acme)).not.toContain("forgejo-token");
+  });
+
   it("lists the implicit default repository when no catalog is published", async () => {
     const response = await app.request("/api/repos", authed());
     expect(response.status).toBe(200);

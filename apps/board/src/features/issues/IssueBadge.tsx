@@ -1,4 +1,4 @@
-import { CircleDot, Hash, Link, ListTodo, type LucideIcon } from "lucide-react";
+import { CircleDot, GitBranch, Hash, Link, ListTodo, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 export type IssueView = {
@@ -35,6 +35,7 @@ export function normalizeIssues(value: unknown): IssueView[] {
 
 function providerOf(raw: string): string {
   if (raw.startsWith("gh#") || raw.startsWith("gh:")) return "gh";
+  if (raw.startsWith("fj#") || raw.startsWith("fj:")) return "fj";
   const index = raw.indexOf(":");
   if (index <= 0) return "unknown";
   return raw.slice(0, index);
@@ -42,6 +43,7 @@ function providerOf(raw: string): string {
 
 function providerIcon(provider: string): LucideIcon {
   if (provider === "gh") return Hash;
+  if (provider === "fj") return GitBranch;
   if (provider === "vikunja" || provider === "vj") return ListTodo;
   return Link;
 }

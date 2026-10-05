@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Forgejo (and Gitea) issue refs: `fj#12` for the repository's configured Forgejo repo and `fj:owner/name#12`
+  for another repo on the same site. Per-repo `issues.forgejo: { baseUrl, repo, tokenFile? }`: links only without a
+  token, live open/closed state with one. Pasted Forgejo issue and pull request URLs become short refs, and
+  `edit-config` exposes `forgejoBaseUrl` and `forgejoRepo` (never the token).
 - Show initiative and phase reports from `<initiative folder>/reports/` (`.md` and `.html`, `.md`/`.html` twins grouped,
   `phase-<n>` names attached to their phase). The snapshot lists them from the git tree; cards show "N reports", the
   details panel has a **Reports** section and phase chips, and a large viewer renders markdown (sanitized, relative

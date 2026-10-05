@@ -101,7 +101,7 @@ describe("issueRefFromUrl", () => {
 
   it("rejects a Vikunja-looking URL on another host", () => {
     const result = issueRefFromUrl("https://other.example.org/tasks/45", config);
-    expect(result).toEqual({ error: "other.example.org is not this repository's GitHub or Vikunja site." });
+    expect(result).toEqual({ error: "other.example.org is not this repository's GitHub, Forgejo or Vikunja site." });
   });
 
   it("rejects any task URL when no Vikunja site is configured", () => {
@@ -123,5 +123,56 @@ describe("issueLinkFor", () => {
     expect(issueLinkFor("gh#12", {})).toBe("");
     expect(issueLinkFor("vj:45", {})).toBe("");
     expect(issueLinkFor("linear:ABC-1", config)).toBe("");
+  });
+});
+
+describe("Forgejo refs", () => {
+  const config = { forgejoBaseUrl: "https://forge.example.com/", forgejoRepo: "acme/widgets" };
+
+  it("parses fj#<n> and fj:owner/name#<n>", () => {
+    expect(parseIssueRef("fj#12")).toEqual({ provider: "fj", key: "12", raw: "fj#12", known: true });
+    expect(parseIssueRef("fj:other/thing#3")).toEqual({
+      provider: "fj",
+      key: "other/thing#3",
+      raw: "fj:other/thing#3",
+      known: true,
+    });
+  });
+
+  it("rejects malformed fj refs instead of treating them as generic", () => {
+    expect(parseIssueRef("fj#0")).toBeUndefined();
+    expect(parseIssueRef("fj:abc")).toBeUndefined();
+    expect(parseIssueRef("fj:owner#3")).toBeUndefined();
+  });
+
+  it("leaves fj refs unchanged when normalizing", () => {
+    expect(normalizeIssueRef(" fj#12 ")).toBe("fj#12");
+    expect(normalizeIssueRef("fj:other/thing#3")).toBe("fj:other/thing#3");
+  });
+
+  it("maps the configured repo's issues and pulls to fj#<n>", () => {
+    expect(issueRefFromUrl("https://forge.example.com/acme/widgets/issues/12", config)).toEqual({ ref: "fj#12" });
+    expect(issueRefFromUrl("https://forge.example.com/Acme/Widgets/pulls/7/", config)).toEqual({ ref: "fj#7" });
+  });
+
+  it("qualifies another repo on the same Forgejo host", () => {
+    expect(issueRefFromUrl("https://forge.example.com/other/thing/issues/3", config)).toEqual({
+      ref: "fj:other/thing#3",
+    });
+  });
+
+  it("rejects Forgejo URLs that are not issues and foreign hosts", () => {
+    expect(issueRefFromUrl("https://forge.example.com/acme/widgets/src/branch/main", config)).toHaveProperty("error");
+    expect(issueRefFromUrl("https://other.example.org/acme/widgets/issues/3", config)).toEqual({
+      error: "other.example.org is not this repository's GitHub, Forgejo or Vikunja site.",
+    });
+    expect(issueRefFromUrl("https://forge.example.com/acme/widgets/issues/3", {})).toHaveProperty("error");
+  });
+
+  it("builds fj links from config only", () => {
+    expect(issueLinkFor("fj#12", config)).toBe("https://forge.example.com/acme/widgets/issues/12");
+    expect(issueLinkFor("fj:other/thing#3", config)).toBe("https://forge.example.com/other/thing/issues/3");
+    expect(issueLinkFor("fj#12", { forgejoBaseUrl: "https://forge.example.com" })).toBe("");
+    expect(issueLinkFor("fj:other/thing#3", {})).toBe("");
   });
 });

@@ -6,6 +6,7 @@ import { DEFAULT_REPO_ID, getConfig } from "../store.js";
 import { createGithubIssueProvider } from "./github.js";
 import { createIssueRegistry, ISSUE_CACHE_TTL_MS, type IssueRegistry } from "./registry.js";
 import type { IssueProvider, IssueRef, IssueState } from "./provider.js";
+import { createForgejoProvider, forgejoBase, forgejoRepo } from "./forgejo.js";
 import { createVikunjaProvider, vikunjaBase } from "./vikunja.js";
 
 /** Link on a card. `title` and `state` are present only when a fresh cached state exists. */
@@ -95,6 +96,16 @@ function providersFor(repoId: string): IssueProvider[] {
   const providers: IssueProvider[] = [];
   const github = githubProvider(repoId, repo, forgeRepo);
   if (github !== undefined) providers.push(github);
+  const forgejo = repo?.issues?.forgejo;
+  if (forgejo !== undefined) {
+    providers.push(
+      createForgejoProvider({
+        baseUrl: forgejo.baseUrl,
+        repo: forgejo.repo,
+        ...(forgejo.tokenFile === undefined ? {} : { tokenFile: forgejo.tokenFile }),
+      }),
+    );
+  }
   const vikunja = repo?.issues?.vikunja;
   if (vikunja !== undefined) {
     providers.push(
@@ -112,6 +123,7 @@ function signatureFor(repoId: string): string {
   return JSON.stringify({
     github: repo?.issues?.github?.repo ?? null,
     vikunja: repo?.issues?.vikunja ?? null,
+    forgejo: repo?.issues?.forgejo ?? null,
     forge: readForgeRepo(repoId) ?? null,
     tokenFile: blank(process.env.SNOBOARD_GITHUB_TOKEN_FILE) ?? null,
     // A rotated or revoked token at the same path rebuilds the providers.
@@ -249,15 +261,24 @@ export async function fetchInitiativeIssues(
 
 const OWNER_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-/** Public link settings for the client (no tokens): Vikunja site and the GitHub repo `gh#n` means. */
-export function issueLinkConfig(repoId: string): { vikunjaBaseUrl?: string; githubRepo?: string } {
+/** Public link settings for the client (no tokens): Vikunja and Forgejo sites, and the repos `gh#n` / `fj#n` mean. */
+export function issueLinkConfig(repoId: string): {
+  vikunjaBaseUrl?: string;
+  githubRepo?: string;
+  forgejoBaseUrl?: string;
+  forgejoRepo?: string;
+} {
   const repo = findActiveRepo(repoId);
   const configured = blank(repo?.issues?.github?.repo);
   const forge = readForgeRepo(repoId);
   const github = configured ?? (forge !== undefined && forge !== "owner/name" ? forge : undefined);
   const vikunja = repo?.issues?.vikunja === undefined ? undefined : vikunjaBase(repo.issues.vikunja.baseUrl.trim());
+  const fjConfig = repo?.issues?.forgejo;
+  const fjBase = fjConfig === undefined ? undefined : forgejoBase(fjConfig.baseUrl.trim());
+  const fjRepo = fjBase === undefined ? undefined : forgejoRepo(fjConfig?.repo);
   return {
     ...(vikunja === undefined ? {} : { vikunjaBaseUrl: vikunja }),
+    ...(fjBase === undefined || fjRepo === undefined ? {} : { forgejoBaseUrl: fjBase, forgejoRepo: fjRepo }),
     ...(github !== undefined && OWNER_NAME.test(github) ? { githubRepo: github } : {}),
   };
 }

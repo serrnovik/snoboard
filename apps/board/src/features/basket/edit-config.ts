@@ -20,8 +20,8 @@ export type ClientEditConfig = {
   baseBranch?: string;
   /** GitHub owner/name, for https links to commits. */
   forgeRepo?: string;
-  /** Tracker link settings (no tokens): Vikunja site and the GitHub repo `gh#n` means. */
-  issues?: { vikunjaBaseUrl?: string; githubRepo?: string };
+  /** Tracker link settings (no tokens): Vikunja/Forgejo sites and the repos `gh#n` / `fj#n` mean. */
+  issues?: IssueLinks;
 };
 
 const EMPTY_CONFIG: ClientEditConfig = {
@@ -92,12 +92,19 @@ export function parseEditConfig(value: unknown): ClientEditConfig {
   };
 }
 
-function parseIssueLinks(value: Record<string, unknown>): { vikunjaBaseUrl?: string; githubRepo?: string } {
+type IssueLinks = { vikunjaBaseUrl?: string; githubRepo?: string; forgejoBaseUrl?: string; forgejoRepo?: string };
+
+function parseIssueLinks(value: Record<string, unknown>): IssueLinks {
   const base = typeof value.vikunjaBaseUrl === "string" ? value.vikunjaBaseUrl : "";
   const repo = typeof value.githubRepo === "string" ? value.githubRepo : "";
+  const fjBase = typeof value.forgejoBaseUrl === "string" ? value.forgejoBaseUrl : "";
+  const fjRepo = typeof value.forgejoRepo === "string" ? value.forgejoRepo : "";
   return {
     ...(/^https?:\/\/[^\s]+$/.test(base) ? { vikunjaBaseUrl: base } : {}),
     ...(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? { githubRepo: repo } : {}),
+    ...(/^https?:\/\/[^\s]+$/.test(fjBase) && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fjRepo)
+      ? { forgejoBaseUrl: fjBase, forgejoRepo: fjRepo }
+      : {}),
   };
 }
 

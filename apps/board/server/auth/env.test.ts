@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -104,7 +103,7 @@ describe("auth environment", () => {
   it("loads password, github, and explicit none mode", async () => {
     const dir = await makeDir();
     const secretFile = path.join(dir, "session");
-    await writeFile(secretFile, Buffer.concat([randomBytes(32), Buffer.from("\n")]));
+    await writeFile(secretFile, `${"s".repeat(32)}\n`);
     const hash = await hashPassword("correct-password");
     expect(isArgon2idHash(hash)).toBe(true);
     const hashFile = path.join(dir, "password");

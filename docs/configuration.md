@@ -43,7 +43,7 @@ Quote `fileUrl` and `prUrl` so YAML does not treat `{repo}` as a mapping. The to
 
 ## Issues
 
-Issue trackers: an initiative can list issue refs in its frontmatter (`gh#123`, `gh:owner/name#123`, `vj:456`). The board shows a count on the card without calling the tracker. Opening the initiative loads each title, whether it is open or closed, and a link. A state Snoboard cannot read is a plain link. Snoboard never creates, updates, or deletes issues.
+Issue trackers: an initiative can list issue refs in its frontmatter (`gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456`). The board shows a count on the card without calling the tracker. Opening the initiative loads each title, whether it is open or closed, and a link. A state Snoboard cannot read is a plain link. Snoboard never creates, updates, or deletes issues.
 
 Each repository enables its own trackers. A provider that is not configured for that repository leaves the ref as text. One repository's token is never sent for another.
 
@@ -56,6 +56,26 @@ Each repository enables its own trackers. A provider that is not configured for 
 Snoboard reads `GET /repos/{owner}/{name}/issues/{number}`. Pull requests returned by that endpoint are shown too. The token is the shared read token in `SNOBOARD_GITHUB_TOKEN_FILE`. It is sent only for that repository's own `forge.repo` from `.snoboard.yml`. Set `issues.github.repo` to the same `owner/name`. A different repository, including a qualified ref, is read without the token.
 
 When the board serves one repository and that entry has no `issues` block, GitHub uses `forge.repo` and `SNOBOARD_GITHUB_TOKEN_FILE`. Without the token file, refs stay on the board as text and Snoboard does not call GitHub. Vikunja still needs an `issues` block.
+
+### Forgejo
+
+Forgejo and Gitea share the same API.
+
+| Key | Meaning |
+| --- | --- |
+| `baseUrl` | Forgejo site origin, for example `https://forge.example.com`. Must be `https`. `http` is allowed only when the host is `localhost`, `127.0.0.1`, or `::1` |
+| `repo` | `owner/name` used for `fj#123`. `fj:owner/name#123` names another repository on the same site |
+| `tokenFile` | Optional. Path to a file that contains a read-only API token. The token is read once at startup. Without it, `fj` refs link to `{baseUrl}/{owner}/{name}/issues/{n}`, the state shows as unknown, and Snoboard never calls Forgejo |
+
+Snoboard calls `GET {baseUrl}/api/v1/repos/{owner}/{name}/issues/{n}` with `Authorization: token ...`. Pull requests share the issue numbers, so the same call answers for `/pulls/{n}`. The state is `open` or `closed`; anything else, a missing issue or a rejected token is unknown. `html_url` is used only when it is on `baseUrl`. Redirects are refused. Pasting `https://{host}/{owner}/{name}/issues/{n}` or `/pulls/{n}` from the configured site stores `fj#{n}` for the configured repo and `fj:{owner}/{name}#{n}` for others; URLs from other hosts are rejected.
+
+```yaml
+issues:
+  forgejo:
+    baseUrl: https://forge.example.com
+    repo: example/acme
+    tokenFile: /var/run/secrets/forgejo-token # optional: omit for links only
+```
 
 ### Vikunja
 
@@ -75,7 +95,7 @@ issues:
     tokenFile: /var/run/secrets/vikunja-token # optional: omit for links only
 ```
 
-Chips always link when Snoboard can build the URL without the network: `gh:owner/name#n` always, `gh#n` when the repository has a GitHub repo, and `vj:n` when `vikunja.baseUrl` is set. `GET /api/repos/{id}/edit-config` returns these settings as `issues: { githubRepo, vikunjaBaseUrl }` (never tokens), so the editor can turn a pasted URL into a short ref.
+Chips always link when Snoboard can build the URL without the network: `gh:owner/name#n` always, `gh#n` when the repository has a GitHub repo, `fj#n` and `fj:owner/name#n` when `forgejo` is set, and `vj:n` when `vikunja.baseUrl` is set. `GET /api/repos/{id}/edit-config` returns these settings as `issues: { githubRepo, vikunjaBaseUrl, forgejoBaseUrl, forgejoRepo }` (never tokens), so the editor can turn a pasted URL into a short ref.
 
 ## Deployed version
 
@@ -100,7 +120,7 @@ repository still reads its own `.snoboard.yml` (or `configPath`).
 | `edit.directBranch` | with `direct` | Branch `direct` updates |
 | `edit.botTokenFile` | no | Bot token for password and Cloudflare Access users, for this repository only |
 | `edit.githubWriteScope` | no | `repo` or `public_repo` for the GitHub write grant. Default: `SNOBOARD_GITHUB_WRITE_SCOPE` |
-| `issues` | no | Trackers for this repository only. `github.repo` is `owner/name` (same as `forge.repo` so the read token is sent). `vikunja` is `baseUrl` and an optional `tokenFile` |
+| `issues` | no | Trackers for this repository only. `github.repo` is `owner/name` (same as `forge.repo` so the read token is sent). `forgejo` is `baseUrl`, `repo` and an optional `tokenFile`. `vikunja` is `baseUrl` and an optional `tokenFile` |
 
 ```yaml
 repos:
@@ -141,7 +161,7 @@ Unknown keys, duplicate ids, a missing key file, or credentials inside a URL sto
 - A GitHub user's write grant belongs to the session, not to one repository. If GitHub refuses it for a repository
   (401, 403 or 404), the board asks the user to connect write access again, with that repository's scope.
 - Auth, sessions and `SNOBOARD_GITHUB_TOKEN_FILE` (read-only pull request status and GitHub issue state) are shared by all repositories. The issue token is sent only for that repository's own `forge.repo`.
-- Issue trackers do not cross repositories. A repository without an `issues` block does not use another repository's GitHub repo or Vikunja token. In a file with several repositories, omitting `issues` leaves refs as text.
+- Issue trackers do not cross repositories. A repository without an `issues` block does not use another repository's GitHub repo, Forgejo site or Vikunja token. In a file with several repositories, omitting `issues` leaves refs as text.
 
 ### Migrating from environment variables
 
