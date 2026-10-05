@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 
 const INITIATIVE_ID = /^[a-z0-9_-]+-\d{3}$/;
-const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#([1-9]\d*))?$/;
+const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#(0|[1-9]\d*))?$/;
 
 function requiredEnum(values: readonly string[], label: string) {
   const unique = [...new Set(values)];
@@ -14,11 +14,12 @@ function requiredEnum(values: readonly string[], label: string) {
 
 export function PhaseSchema(config: Config) {
   return z.object({
-    id: z.number().int().positive(),
+    // Phase 0 is allowed: many plans start with "Phase 0 — investigation".
+    id: z.number().int().nonnegative(),
     title: z.string().min(1),
     status: requiredEnum(config.statuses, "statuses"),
     pr: z.number().int().positive().optional(),
-    depends_on: z.array(z.number().int().positive()).optional(),
+    depends_on: z.array(z.number().int().nonnegative()).optional(),
   });
 }
 

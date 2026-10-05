@@ -310,8 +310,9 @@ function fixPhaseStatuses(phases: YAMLSeq<Node>, allowed: readonly string[], eve
   });
 }
 
-function positiveInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+/** Phase ids start at 0 or 1 (both are common); negatives are invalid. */
+function phaseInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function idIsMissing(item: YAMLMap): boolean {
@@ -325,7 +326,7 @@ function idIsMissing(item: YAMLMap): boolean {
 function phaseId(item: YAMLMap): number | undefined {
   const node = item.get("id", true);
   if (!isScalar(node)) return undefined;
-  return positiveInt(node.value);
+  return phaseInt(node.value);
 }
 
 function fieldTargetsRemovedPhase(field: string, removed: ReadonlySet<number>): boolean {

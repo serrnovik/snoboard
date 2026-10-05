@@ -12,7 +12,7 @@ export type ValidationIssue = {
   severity: "error" | "warning";
 };
 
-const PHASE_TARGET = /^([a-z0-9_-]+-\d{3})#([1-9]\d*)$/;
+const PHASE_TARGET = /^([a-z0-9_-]+-\d{3})#(0|[1-9]\d*)$/;
 const STALE_EXEMPT = new Set(["parked", "dropped"]);
 
 type InitiativeFile = Extract<ParsedFile, { kind: "initiative" }>;

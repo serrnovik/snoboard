@@ -8,7 +8,7 @@ import { MAX_ICON_LENGTH, parseIcon } from "./icons.js";
 export const PROJECT_NAME = /^[a-z0-9_][a-z0-9_-]*$/;
 export const SLUG_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const INITIATIVE_ID = /^[a-z0-9_-]+-\d{3}$/;
-export const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#([1-9]\d*))?$/;
+export const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#(0|[1-9]\d*))?$/;
 
 /** Upper bound for initiative body text in setBody and createInitiative (characters). */
 export const MAX_INITIATIVE_BODY_LENGTH = 60_000;
@@ -41,7 +41,7 @@ export const EditSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("setPhaseStatus"),
     id: z.string().regex(INITIATIVE_ID),
-    phase: z.number().int().positive(),
+    phase: z.number().int().nonnegative(),
     from: z.string(),
     to: z.string(),
   }),

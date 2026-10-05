@@ -26,6 +26,19 @@ const example = {
 };
 
 describe("InitiativeFrontmatterSchema", () => {
+  it("accepts a phase 0 (\"Phase 0 — investigation\") and #0 dependencies, rejects negatives", () => {
+    const zero = {
+      ...example,
+      depends_on: ["acme-070#0"],
+      phases: [
+        { id: 0, title: "Investigation", status: "done" },
+        { id: 1, title: "Build", status: "planned", depends_on: [0] },
+      ],
+    };
+    expect(schema.safeParse(zero).success).toBe(true);
+    expect(schema.safeParse({ ...example, phases: [{ id: -1, title: "Bad", status: "planned" }] }).success).toBe(false);
+  });
+
   it("accepts the frontmatter example", () => {
     expect(schema.parse(example)).toEqual(example);
   });
