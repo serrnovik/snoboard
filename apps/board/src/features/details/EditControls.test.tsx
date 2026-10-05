@@ -176,3 +176,45 @@ describe("edit controls", () => {
     expect(screen.queryByTestId("edit-controls")).toBeNull();
   });
 });
+
+describe("icon editing", () => {
+  it("queues setIcon from a suggestion and from typed text, and refuses a bad value", async () => {
+    const user = userEvent.setup();
+    mockApis(true);
+    const basket = renderHook(() => useBasket());
+    render(<EditControls item={item()} />);
+    const input = await screen.findByRole("textbox", { name: "Icon" });
+
+    await user.click(screen.getByRole("button", { name: "Use icon 🚀" }));
+    await waitFor(() =>
+      expect(basket.result.current.edits).toContainEqual({ kind: "setIcon", id: "acme-002", from: "", to: "🚀" }),
+    );
+
+    await user.clear(input);
+    await user.type(input, "not an icon{Enter}");
+    expect(screen.getByRole("alert").textContent).toMatch(/one or two emoji/);
+    expect(basket.result.current.edits.filter((edit) => edit.kind === "setIcon")).toEqual([
+      { kind: "setIcon", id: "acme-002", from: "", to: "🚀" },
+    ]);
+
+    await user.clear(input);
+    await user.type(input, "brand/logo.svg{Enter}");
+    await waitFor(() =>
+      expect(basket.result.current.edits.filter((edit) => edit.kind === "setIcon")).toEqual([
+        { kind: "setIcon", id: "acme-002", from: "", to: "brand/logo.svg" },
+      ]),
+    );
+  });
+
+  it("clears an existing icon", async () => {
+    const user = userEvent.setup();
+    mockApis(true);
+    const basket = renderHook(() => useBasket());
+    render(<EditControls item={item({ icon: "🧩" })} />);
+    expect(((await screen.findByRole("textbox", { name: "Icon" })) as HTMLInputElement).value).toBe("🧩");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() =>
+      expect(basket.result.current.edits).toContainEqual({ kind: "setIcon", id: "acme-002", from: "🧩", to: "" }),
+    );
+  });
+});

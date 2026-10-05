@@ -10,6 +10,7 @@ import { changedSinceMergeBase,
   type RefInfo,
 } from "./git.js";
 import { blockedBy, buildGraph, isReady, type Graph } from "./graph.js";
+import { parseIcon } from "./icons.js";
 import { parseInitiativeFile } from "./parse.js";
 import { groupReports, type ReportEntry } from "./reports.js";
 import type { InitiativeFrontmatter } from "./schema.js";
@@ -20,6 +21,8 @@ export interface SnapshotOptions extends GitCallOptions {
 }
 
 export type BoardItem = InitiativeFrontmatter & {
+  /** A valid `icon` (emoji or repo-relative image path); a bad value is dropped. */
+  icon?: string;
   path: string;
   project: string;
   number: string;
@@ -256,6 +259,7 @@ export async function buildSnapshot(
 
   const items: BoardItem[] = selected.map((candidate) => ({
     ...candidate.frontmatter,
+    icon: parseIcon(candidate.frontmatter.icon) === undefined ? undefined : (candidate.frontmatter.icon as string),
     path: candidate.path,
     project: candidate.project,
     number: candidate.number,

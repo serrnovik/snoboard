@@ -68,6 +68,9 @@ function overlay(item: BoardItem, edits: readonly Edit[]): BoardItem {
       case "setTitle":
         next = { ...next, title: edit.to };
         break;
+      case "setIcon":
+        next = { ...next, icon: edit.to === "" ? undefined : edit.to };
+        break;
       case "setLabels":
         next = { ...next, labels: [...edit.to] };
         break;

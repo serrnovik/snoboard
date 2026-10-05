@@ -476,7 +476,7 @@ describe("board view", () => {
     expect(screen.getByTestId("card-billing-004")).toBeTruthy();
 
     await user.click(screen.getByRole("combobox", { name: "Project" }));
-    await user.click(await screen.findByRole("option", { name: "billing" }));
+    await user.click(await screen.findByRole("option", { name: /^billing/ }));
     expect(window.location.search).toContain("project=billing");
 
     await user.click(screen.getByRole("combobox", { name: "Label" }));

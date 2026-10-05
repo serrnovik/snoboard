@@ -18,6 +18,11 @@ import { IssuesEditor, LinksEditor } from "@/features/details/ListEditors";
 import type { CreateProviderId } from "@/features/issues/NewIssueDialog";
 import { useRepoId } from "@/features/repo/context";
 import { repoApi } from "@/lib/routes";
+import { iconProblem } from "snoboard/browser";
+import { Icon } from "@/features/icons/display";
+
+/** A few one-click choices; any emoji or repo image path can be typed. */
+export const ICON_SUGGESTIONS = ["🚀", "🧩", "🛠️", "🐛", "📈", "🔒", "🎨", "🧠", "⚡", "📦"] as const;
 
 const INITIATIVE_ID = /^[a-z0-9_-]+-\d{3}$/;
 
@@ -68,6 +73,24 @@ function EditForm({
   const [title, setTitle] = useState(titleValue);
   const [labels, setLabels] = useState(labelText);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const iconValue = displayedIcon(edits) ?? item.icon ?? "";
+  const [icon, setIcon] = useState(iconValue);
+  const [iconError, setIconError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIcon(iconValue);
+  }, [iconValue]);
+
+  function commitIcon(next = icon) {
+    const value = next.trim();
+    if (value !== "" && iconProblem(value) !== undefined) {
+      setIconError("Use one or two emoji, or a repo image path (.png, .svg, .webp, .ico).");
+      return;
+    }
+    setIconError(null);
+    setIcon(value);
+    basket.add({ kind: "setIcon", id: item.id, from: item.icon ?? "", to: value });
+  }
 
   useEffect(() => {
     setTitle(titleValue);
@@ -147,6 +170,56 @@ function EditForm({
           }}
         />
       </label>
+      <div className="flex flex-col gap-1 text-sm">
+        <label className="flex flex-col gap-1" htmlFor={`${formId}-icon`}>
+          Icon
+          <span className="flex items-center gap-2">
+            <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border text-base" data-testid="icon-preview">
+              <Icon value={iconProblem(icon.trim()) === undefined ? icon.trim() : undefined} />
+            </span>
+            <Input
+              id={`${formId}-icon`}
+              value={icon}
+              placeholder="emoji or path/to/icon.svg (empty: project icon)"
+              aria-invalid={iconError !== null}
+              onChange={(event) => setIcon(event.target.value)}
+              onBlur={() => commitIcon()}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                commitIcon();
+              }}
+            />
+          </span>
+        </label>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Icon suggestions">
+          {ICON_SUGGESTIONS.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              aria-label={`Use icon ${choice}`}
+              className="inline-flex size-7 items-center justify-center rounded-md border text-base hover:bg-muted"
+              onClick={() => commitIcon(choice)}
+            >
+              {choice}
+            </button>
+          ))}
+          {iconValue !== "" ? (
+            <button
+              type="button"
+              className="rounded-md border px-2 text-xs hover:bg-muted"
+              onClick={() => commitIcon("")}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+        {iconError !== null ? (
+          <p role="alert" className="text-sm text-destructive">
+            {iconError}
+          </p>
+        ) : null}
+      </div>
       <IssuesEditor
         id={item.id}
         issues={item.issues}
@@ -367,6 +440,11 @@ function displayedScalar(edits: readonly Edit[], kind: "setStatus" | "setPriorit
   }
   if (match.kind !== kind) return undefined;
   return match.to;
+}
+
+function displayedIcon(edits: readonly Edit[]): string | undefined {
+  const match = edits.find((edit) => edit.kind === "setIcon");
+  return match?.kind === "setIcon" ? match.to : undefined;
 }
 
 function displayedLabels(edits: readonly Edit[]): string[] | undefined {

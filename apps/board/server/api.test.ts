@@ -135,6 +135,8 @@ describe("read-only API", () => {
       priorities: config.priorities,
       doneStatuses: config.doneStatuses,
       staleAfterDays: config.staleAfterDays,
+      projects: { acme: { icon: "🧩", name: "Acme" }, platform: { icon: "🛠️" } },
+      labels: { signup: { icon: "✍️", color: "blue" } },
     });
     expect(body.items.map((item) => item.id).sort()).toEqual(["acme-001", "acme-002", "acme-003"]);
     expect(body.legacy.some((item) => item.path.includes("platform/001-ci"))).toBe(true);
@@ -408,6 +410,96 @@ describe("read-only API", () => {
       }
       const traversal = await app.request("/api/initiatives/acme-001/assets/../secret.png", authed());
       expect(traversal.status).toBe(404);
+    } finally {
+      setInitiativeRepoDir(undefined);
+      await repo.remove();
+    }
+  });
+
+  it("serves only referenced icons, checked by magic bytes, with SVG locked down", async () => {
+    const files = await readTree(demoRoot);
+    const configText = [
+      (files[".snoboard.yml"] ?? "").split("projects:")[0]?.trimEnd() ?? "",
+      "projects:",
+      "  acme: { icon: brand/logo.svg, name: Acme }",
+      "  billing: { icon: brand/fake.png }",
+      "  platform: { icon: \"🛠️\" }",
+      "labels:",
+      "  billing: { icon: \"💳\", color: green }",
+      "  bad: { icon: x.png, color: \"#fff\" }",
+      "",
+    ].join(String.fromCharCode(10));
+    const config = loadConfig(configText);
+    const initiativePath = "initiatives/acme/001-onboarding/initiative.md";
+    const original = files[initiativePath];
+    if (original === undefined) throw new Error("demo initiative missing");
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]), Buffer.from("pixels")]);
+    const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
+    const repo = await createTmpRepo({
+      commits: [
+        {
+          message: "demo",
+          files: {
+            ...files,
+            ".snoboard.yml": configText,
+            [initiativePath]: original.replace(/^id: (.*)$/m, "id: $1" + String.fromCharCode(10) + "icon: initiatives/acme/001-onboarding/assets/rocket.png"),
+            "initiatives/acme/001-onboarding/assets/rocket.png": png,
+            "brand/logo.svg": svg,
+            "brand/fake.png": "<html>not an image</html>",
+            "brand/unreferenced.png": png,
+            "brand/huge.png": Buffer.concat([png, Buffer.alloc(300 * 1024)]),
+          },
+        },
+      ],
+    });
+    try {
+      seedStore(await buildSnapshot(repo.dir, config), config);
+      setInitiativeRepoDir(repo.dir);
+      const icon = (target: string) => `/api/repos/default/icons/${encodeURIComponent(target)}`;
+
+      const logo = await app.request(icon("brand/logo.svg"), authed());
+      expect(logo.status).toBe(200);
+      expect(logo.headers.get("content-type")).toBe("image/svg+xml");
+      expect(logo.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'");
+      expect(logo.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(logo.headers.get("cache-control")).toBe("private, max-age=3600");
+      expect(await logo.text()).toBe(svg);
+
+      const rocket = await app.request(icon("initiatives/acme/001-onboarding/assets/rocket.png"), authed());
+      expect(rocket.status).toBe(200);
+      expect(rocket.headers.get("content-type")).toBe("image/png");
+      expect(rocket.headers.get("content-security-policy")).toBe("default-src 'none'");
+
+      expect((await app.request(icon("brand/logo.svg"))).status).toBe(401);
+
+      for (const target of [
+        "brand/fake.png",
+        "brand/unreferenced.png",
+        "brand/huge.png",
+        "../brand/logo.svg",
+        "brand/../brand/logo.svg",
+        "/brand/logo.svg",
+        ".snoboard.yml",
+        "x.png",
+      ]) {
+        const refused = await app.request(icon(target), authed());
+        expect(refused.status, target).toBe(404);
+        expect(refused.headers.get("content-type") ?? "", target).not.toContain("image/");
+      }
+      expect((await app.request("/api/repos/default/icons/brand/logo.svg", authed())).status).toBe(404);
+      expect((await app.request(`/api/repos/nope/icons/${encodeURIComponent("brand/logo.svg")}`, authed())).status).toBe(404);
+
+      const board = (await (await app.request("/api/repos/default/board", authed())).json()) as {
+        config: { projects: unknown; labels: unknown };
+        items: Array<{ id: string; icon?: string }>;
+      };
+      expect(board.config.projects).toEqual({
+        acme: { icon: "brand/logo.svg", name: "Acme" },
+        billing: { icon: "brand/fake.png" },
+        platform: { icon: "🛠️" },
+      });
+      expect(board.config.labels).toEqual({ billing: { icon: "💳", color: "green" } });
+      expect(board.items.find((item) => item.id === "acme-001")?.icon).toBe("initiatives/acme/001-onboarding/assets/rocket.png");
     } finally {
       setInitiativeRepoDir(undefined);
       await repo.remove();

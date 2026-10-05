@@ -62,6 +62,7 @@ import { botTokenFileFor, editSettingsFor, findActiveRepo, listActiveRepos } fro
 import { DEFAULT_REPO_ID, getConfig, getSnapshot, getStatus } from "./store.js";
 import { initiativeHistory, snapshotPeople } from "./history.js";
 import { lookupReport, reportNotFound, reportResponse } from "./reports.js";
+import { boardDisplay, iconNotFound, iconResponse, lookupIcon } from "./icons.js";
 
 const REFRESH_WINDOW_MS = 30_000;
 const REPO_ID = /^[a-z0-9-]{1,32}$/;
@@ -233,6 +234,7 @@ async function boardJson(c: Context<BoardEnv>, repoId: string) {
       priorities: config.priorities,
       doneStatuses: config.doneStatuses,
       staleAfterDays: config.staleAfterDays,
+      ...boardDisplay(config),
     },
     items: snapshot.items.map((item) => ({
       ...item,
@@ -343,6 +345,23 @@ async function initiativeReportResponse(c: Context<BoardEnv>, repoId: string, re
   return reportResponse(repoDir, found);
 }
 
+/**
+ * An image icon (`.png`, `.svg`, `.webp`, `.ico`) named by `.snoboard.yml` `projects` or an
+ * initiative's `icon`. The path is one URL-encoded segment. Unreferenced paths are 404.
+ */
+api.get("/repos/:repo/icons/:path", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return iconNotFound();
+  const snapshot = getSnapshot(repoId);
+  const config = getConfig(repoId);
+  if (snapshot === null || config === null) return iconNotFound();
+  const found = lookupIcon(snapshot, config, c.req.param("path"));
+  if (found === undefined) return iconNotFound();
+  const repoDir = initiativeRepoDir(repoId);
+  if (repoDir === undefined) return iconNotFound();
+  return iconResponse(repoDir, found);
+});
+
 api.get("/repos/:repo/initiatives/:id/history", async (c) => {
   const repoId = c.req.param("repo");
   if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
@@ -401,7 +420,7 @@ async function initiativeJson(c: Context<BoardEnv>, repoId: string) {
     blockedChain: blockedChain(snapshot.graph, id),
     dependents,
     issues,
-    ...(config === null ? {} : { forge: config.forge }),
+    ...(config === null ? {} : { forge: config.forge, display: boardDisplay(config) }),
     ...(prs === undefined ? {} : { prs }),
   });
 }

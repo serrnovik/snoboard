@@ -28,6 +28,18 @@ untrusted. Assets: the viewer's session on the board, and the viewer's privacy (
 | Unauthenticated access | Same sign-in as the board API; every answer has `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. |
 | Resource use | Listing reads trees only (no blobs). One blob is read per request, at most 2 MB per report and 5 MB per image (size checked with `git cat-file -s` before reading). At most 200 reports per initiative are listed. |
 
+### Icons
+
+Project icons come from `.snoboard.yml`, initiative icons from frontmatter; both are written by anyone who can push.
+
+| Threat | Control |
+| --- | --- |
+| Reading arbitrary repository files | `GET /api/repos/<repo>/icons/<encoded path>` answers only a path that `.snoboard.yml` `projects.*.icon` or a shown initiative's `icon` names. The path must be repo-relative ASCII segments ending in `.png`, `.svg`, `.webp` or `.ico`; `..`, `.` segments, a leading `/`, backslashes and anything unreferenced are `404` before git runs. The blob is read with `git cat-file` at the default branch tip (project icons) or the initiative's commit; trees, submodules and blobs over 256 KB are refused. |
+| Content-type confusion | Answered only when the magic bytes are PNG, WebP, ICO or SVG markup **and** match the extension; otherwise `404`. `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer`. |
+| Script in an SVG icon | The board only uses icons as `<img src>`, where SVG never runs scripts or loads resources; it never inlines SVG markup into the page. Opening the URL directly gets `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`, so scripts and network loads are still blocked. |
+| Unauthenticated access | Same sign-in as the board API. Successful answers use `Cache-Control: private, max-age=3600`; errors `private, no-store`. |
+| Bad values | Emoji must be one or two grapheme clusters of pictographic characters; label icons are emoji only; label colours come from a fixed palette mapped to CSS classes, so no CSS value from the repository reaches the page. Bad values are validation warnings and are dropped before they reach the browser. |
+
 ### Write path (`SNOBOARD_EDIT_MODES` set)
 
 Assets: the target repository, the issue trackers, the GitHub write tokens (each GitHub user's own token, and the optional bot token),

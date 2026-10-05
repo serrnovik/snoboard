@@ -1,7 +1,7 @@
 // Browser-safe entry point: no git or filesystem access. The board's client
 // bundle imports from "snoboard/browser"; server code uses "snoboard".
 export { VERSION } from "./version.js";
-export { ConfigSchema, loadConfig, type Config } from "./config.js";
+export { ConfigSchema, loadConfig, type Config, type LabelDisplay, type ProjectDisplay } from "./config.js";
 export {
   InitiativeFrontmatterSchema,
   PhaseSchema,
@@ -45,6 +45,22 @@ export {
   uniqueAssetPath,
   type AttachmentType,
 } from "./attachments.js";
+export {
+  detectIconType,
+  iconProblem,
+  iconTypeForPath,
+  ICON_IMAGE_TYPES,
+  isEmojiIcon,
+  isIconPath,
+  isLabelColor,
+  LABEL_COLORS,
+  MAX_ICON_BYTES,
+  parseIcon,
+  resolveIcon,
+  type IconImageType,
+  type IconValue,
+  type LabelColor,
+} from "./icons.js";
 export {
   blockedBy,
   blockedChain,

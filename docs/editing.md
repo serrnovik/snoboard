@@ -1,6 +1,6 @@
 # Editing
 
-Snoboard can save small changes from the board: status, priority, phase status, title, labels, issue refs, external links, the markdown body (with attached images), or a new initiative. Changes stay in the browser until someone submits them. Set `SNOBOARD_EDIT_MODES` to turn this on. Leave it empty, or unset, and the board stays read-only.
+Snoboard can save small changes from the board: status, priority, phase status, title, icon, labels, issue refs, external links, the markdown body (with attached images), or a new initiative. Changes stay in the browser until someone submits them. Set `SNOBOARD_EDIT_MODES` to turn this on. Leave it empty, or unset, and the board stays read-only.
 
 | Env var | Meaning |
 | --- | --- |

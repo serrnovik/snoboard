@@ -18,6 +18,8 @@ const defaults = {
     fileUrl: "https://github.com/{repo}/blob/{ref}/{path}",
     prUrl: "https://github.com/{repo}/pull/{pr}",
   },
+  projects: {},
+  labels: {},
 };
 
 describe("loadConfig", () => {
@@ -65,3 +67,38 @@ doneStatuses: [finished]
   });
 });
 
+
+describe("projects and labels display settings", () => {
+  const yaml = (lines: string[]) => lines.join(String.fromCharCode(10));
+
+  it("reads project icons and names and label icons and colours", () => {
+    const config = loadConfig(
+      yaml([
+        "projects:",
+        '  acme: { icon: "🧩", name: Acme }',
+        "  web: { icon: apps/web/public/favicon.svg }",
+        "labels:",
+        '  billing: { icon: "💳", color: green }',
+      ]),
+    );
+    expect(config.projects).toEqual({ acme: { icon: "🧩", name: "Acme" }, web: { icon: "apps/web/public/favicon.svg" } });
+    expect(config.labels).toEqual({ billing: { icon: "💳", color: "green" } });
+  });
+
+  it("keeps a bad icon or colour so validate can warn instead of failing the config", () => {
+    const config = loadConfig(yaml(["projects:", "  acme: { icon: 5 }", "labels:", "  x: { color: '#fff' }"]));
+    expect(config.projects.acme?.icon).toBe(5);
+    expect(config.labels.x?.color).toBe("#fff");
+  });
+
+  it("rejects a project entry that is not a mapping", () => {
+    expect(() => loadConfig(yaml(["projects:", "  acme: nope"]))).toThrow(/projects\.acme/);
+  });
+
+  it("returns copies so callers cannot change the parsed config", () => {
+    const text = yaml(["projects:", '  acme: { icon: "🧩" }']);
+    const first = loadConfig(text);
+    first.projects.acme!.icon = "x";
+    expect(loadConfig(text).projects.acme?.icon).toBe("🧩");
+  });
+});

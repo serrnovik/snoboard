@@ -63,6 +63,29 @@ git(["config", "user.name", "Snoboard Demo"]);
 git(["config", "core.autocrlf", "false"]);
 git(["config", "commit.gpgsign", "false"]);
 
+// Board icons: an SVG logo from the repo for one project, an emoji for the other, and label emoji/colours.
+mkdirSync(path.join(work, "brand"), { recursive: true });
+writeFileSync(
+  path.join(work, "brand", "acme.svg"),
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#4f46e5"/>' +
+    '<path d="M9 23 16 8l7 15h-4l-3-7-3 7z" fill="#fff"/></svg>\n',
+);
+writeFileSync(
+  path.join(work, ".snoboard.yml"),
+  [
+    "projects:",
+    "  acme: { icon: brand/acme.svg, name: Acme }",
+    '  platform: { icon: "🛠️", name: Platform }',
+    "labels:",
+    '  web: { icon: "🌐", color: blue }',
+    '  billing: { icon: "💳", color: green }',
+    '  reports: { icon: "📊", color: violet }',
+    '  infra: { icon: "🏗️", color: gray }',
+    '  security: { icon: "🔒", color: red }',
+    "",
+  ].join("\n"),
+);
+
 initiative("acme/001-onboarding", {
   id: "acme-001", title: "Customer onboarding flow", status: "done", priority: "p1",
   updated: "2026-09-24", labels: ["web"],

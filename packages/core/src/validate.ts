@@ -2,6 +2,7 @@ import type { Config } from "./config.js";
 import { MAX_ISSUE_REFS, parseIssueRef } from "./issues.js";
 import { linkProblem, MAX_LINKS } from "./links.js";
 import { buildGraph, findCycles, type GraphItem } from "./graph.js";
+import { iconProblem, isLabelColor, LABEL_COLORS } from "./icons.js";
 import type { ParsedFile } from "./parse.js";
 
 export type ValidationIssue = {
@@ -201,6 +202,14 @@ export function validate(
       }
     }
   }
+  for (const file of initiatives) {
+    if (file.frontmatter.icon === undefined) continue;
+    const problem = iconProblem(file.frontmatter.icon);
+    if (problem === undefined) continue;
+    issues.push({ path: file.path, field: "icon", message: problem, severity: "warning" });
+  }
+  issues.push(...configIconIssues(config));
+
   const graphItems: GraphItem[] = initiatives.map((file) => ({
     id: file.frontmatter.id,
     status: file.frontmatter.status,
@@ -236,5 +245,34 @@ export function validate(
     }
   }
 
+  return issues;
+}
+
+/** Warnings for `projects` and `labels` display settings in `.snoboard.yml`. */
+export function configIconIssues(config: Config): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const [project, display] of Object.entries(config.projects ?? {})) {
+    if (display.icon === undefined) continue;
+    const problem = iconProblem(display.icon);
+    if (problem !== undefined) {
+      issues.push({ path: ".snoboard.yml", field: `projects.${project}.icon`, message: problem, severity: "warning" });
+    }
+  }
+  for (const [label, display] of Object.entries(config.labels ?? {})) {
+    if (display.icon !== undefined) {
+      const problem = iconProblem(display.icon, { emojiOnly: true });
+      if (problem !== undefined) {
+        issues.push({ path: ".snoboard.yml", field: `labels.${label}.icon`, message: problem, severity: "warning" });
+      }
+    }
+    if (display.color !== undefined && !isLabelColor(display.color)) {
+      issues.push({
+        path: ".snoboard.yml",
+        field: `labels.${label}.color`,
+        message: `color must be one of: ${LABEL_COLORS.join(", ")}`,
+        severity: "warning",
+      });
+    }
+  }
   return issues;
 }

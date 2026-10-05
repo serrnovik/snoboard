@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserLocation } from "@/features/board/sync";
 import { DetailsSheet, InitiativePage } from "./DetailsSheet";
@@ -201,5 +201,30 @@ describe("basket-aware details, people and back navigation", () => {
     render(<DetailsSheet openId="acme-002" backTo="acme-001" onOpenChange={() => {}} />);
     await user.click(await screen.findByRole("button", { name: "Back to acme-001" }));
     expect(back).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("details panel icons and width", () => {
+  it("shows the project icon in the header, label chips, and a resize handle that sets the width", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          ...details(),
+          labels: ["billing"],
+          display: { projects: { acme: { icon: "🧩" } }, labels: { billing: { icon: "💳", color: "green" } } },
+        }),
+      ),
+    );
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    expect((await screen.findByTestId("details-icon")).textContent).toBe("🧩");
+    expect(screen.getByTestId("label-billing").textContent).toBe("💳billing");
+    const handle = screen.getByRole("separator", { name: "Resize details panel" });
+    const sheet = screen.getByTestId("details-sheet");
+    expect(sheet.style.width).toBe("576px");
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(sheet.style.width).toBe("1080px");
+    localStorage.clear();
   });
 });

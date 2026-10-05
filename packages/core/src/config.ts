@@ -28,6 +28,21 @@ export const ForgeSchema = z.object({
 
 export type ForgeConfig = z.infer<typeof ForgeSchema>;
 
+/** Display settings for one project folder. `icon` is checked by `validate` (a bad value is a warning). */
+export const ProjectDisplaySchema = z.object({
+  icon: z.unknown().optional(),
+  name: z.string().min(1).max(80).optional(),
+});
+
+/** Display settings for one label. `icon` and `color` are checked by `validate` (bad values are warnings). */
+export const LabelDisplaySchema = z.object({
+  icon: z.unknown().optional(),
+  color: z.unknown().optional(),
+});
+
+export type ProjectDisplay = z.infer<typeof ProjectDisplaySchema>;
+export type LabelDisplay = z.infer<typeof LabelDisplaySchema>;
+
 const defaultForge = {
   type: "github",
   repo: "owner/name",
@@ -49,6 +64,8 @@ export const ConfigSchema = z
     // Parking-lot folders such as 999-backlog that next-number must skip.
     reservedNumbers: z.array(z.number().int().nonnegative()).default(() => []),
     forge: ForgeSchema.default(defaultForge),
+    projects: z.record(z.string().min(1), ProjectDisplaySchema).default(() => ({})),
+    labels: z.record(z.string().min(1), LabelDisplaySchema).default(() => ({})),
   })
   .superRefine((value, ctx) => {
     const missing = value.doneStatuses.filter((status) => !value.statuses.includes(status));
@@ -80,6 +97,8 @@ function cloneConfig(config: Config): Config {
     priorities: [...config.priorities],
     reservedNumbers: [...config.reservedNumbers],
     forge: { ...config.forge },
+    projects: Object.fromEntries(Object.entries(config.projects).map(([key, value]) => [key, { ...value }])),
+    labels: Object.fromEntries(Object.entries(config.labels).map(([key, value]) => [key, { ...value }])),
   };
 }
 

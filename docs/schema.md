@@ -25,6 +25,7 @@ initiatives/<project>/<NNN>-<slug>/initiative.md
 | `issues` | no | List of at most 30 issue refs. Each entry is `gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456` (alias `vikunja:456`), or `<provider>:<key>` |
 | `links` | no | List of at most 20 external links: `{ title, url }`. See [Links](#links) |
 | `phases` | no | List of phase objects |
+| `icon` | no | One or two emoji (`"🚀"`), or a repo-relative `.png`, `.svg`, `.webp` or `.ico` path (at most 256 KB). Overrides the project icon from `.snoboard.yml`. See [Icons](configuration.md#icons) |
 
 A dependency is either an initiative id (`acme-002`) or an initiative id plus a phase (`acme-001#2`). The phase number has no leading zeros.
 
@@ -93,6 +94,8 @@ Validation reports each problem as `{ path, field, message, severity }`. Severit
 - **Error:** more than 20 `links`, or a link with an empty or too long title, or a URL that is not `https:` or `mailto:`.
 - **Warning:** an `issues` entry uses a provider other than `gh`, `fj`, `vj` or `vikunja`.
 - **Warning:** an `issues` entry is repeated.
+- **Warning:** `icon` is not one or two emoji or a safe repo-relative image path. The board shows the project icon instead.
+- **Warning:** a `projects.<name>.icon`, `labels.<name>.icon` (emoji only) or `labels.<name>.color` (palette name) in `.snoboard.yml` is not valid.
 
 ## Example
 

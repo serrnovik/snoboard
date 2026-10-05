@@ -144,6 +144,8 @@ export function summarizeEdit(edit: Edit): string {
       return oneLine(`${value.id}: phase ${value.phase} status ${value.from} -> ${value.to}`);
     case "setTitle":
       return oneLine(`${value.id}: title ${value.from} -> ${value.to}`);
+    case "setIcon":
+      return oneLine(`${value.id}: icon ${value.from === "" ? "(none)" : value.from} -> ${value.to === "" ? "(none)" : value.to}`);
     case "setLabels":
       return oneLine(`${value.id}: labels ${formatLabels(value.from)} -> ${formatLabels(value.to)}`);
     case "setBody":
@@ -168,6 +170,14 @@ function mutate(root: YAMLMap, edit: FieldEdit, config: Config): { error: string
     case "setTitle": {
       if (edit.to.trim().length === 0 || /[\r\n]/.test(edit.to)) return { error: "invalid title" };
       return setScalarField(root, "title", edit.from, edit.to);
+    }
+    case "setIcon": {
+      const current = readString(root, "icon");
+      if (isFailure(current)) return current;
+      if ((current ?? "") !== edit.from) return { error: "stale" };
+      if (edit.to === "") root.delete("icon");
+      else setString(root, "icon", edit.to);
+      return undefined;
     }
     case "setLabels": {
       const current = readLabels(root);

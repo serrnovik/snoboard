@@ -135,6 +135,8 @@ export function formatPending(edit: Edit): string {
       return `phase ${edit.phase} ${edit.from} → ${edit.to}`;
     case "setTitle":
       return `title ${edit.from} → ${edit.to}`;
+    case "setIcon":
+      return `icon ${edit.from === "" ? "(none)" : edit.from} → ${edit.to === "" ? "(none)" : edit.to}`;
     case "setLabels":
       return `labels ${formatLabelList(edit.from)} → ${formatLabelList(edit.to)}`;
     case "setBody":
@@ -302,6 +304,8 @@ function withFirstFrom(existing: Edit, next: Edit): Edit {
       return next.kind === "setPriority" ? { ...next, from: existing.from } : next;
     case "setTitle":
       return next.kind === "setTitle" ? { ...next, from: existing.from } : next;
+    case "setIcon":
+      return next.kind === "setIcon" ? { ...next, from: existing.from } : next;
     case "setPhaseStatus":
       return next.kind === "setPhaseStatus" ? { ...next, from: existing.from } : next;
     case "createInitiative":
@@ -327,6 +331,7 @@ function isNoOp(edit: Edit): boolean {
     case "setStatus":
     case "setPriority":
     case "setTitle":
+    case "setIcon":
     case "setPhaseStatus":
       return edit.from === edit.to;
   }

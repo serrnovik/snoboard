@@ -37,6 +37,8 @@ export function InitiativeFrontmatterSchema(config: Config) {
       // Shape only; `validate` reports bad titles and URLs so the initiative still shows.
       links: z.array(z.object({ title: z.string(), url: z.string() }).passthrough()).optional(),
       phases: z.array(PhaseSchema(config)).optional(),
+      // Shape only; `validate` warns about a bad value and the board then shows no icon.
+      icon: z.unknown().optional(),
     })
     .passthrough();
 }

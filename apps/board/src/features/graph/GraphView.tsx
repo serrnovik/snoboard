@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Background,
   Handle,
@@ -49,6 +49,10 @@ import {
   type PositionedEdge,
 } from "./layout";
 import "./graph.css";
+import { ItemIcon, publishDisplay, readDisplay } from "@/features/icons/display";
+
+/** Icon source (initiative icon, project) per initiative id, for the custom nodes. */
+const GraphIconItems = createContext<ReadonlyMap<string, { icon?: string; project: string }>>(new Map());
 
 const DEFAULT_DONE_STATUSES = ["done"];
 const NO_EDITS: readonly Edit[] = [];
@@ -137,6 +141,11 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
     [board.items, pending, board.config.doneStatuses],
   );
   const items = useMemo(() => effective.map(toLayoutItem), [effective]);
+  const iconItems = useMemo(() => new Map(effective.map((item) => [item.id, item])), [effective]);
+  const display = useMemo(() => readDisplay(board.config), [board.config]);
+  useEffect(() => {
+    publishDisplay(repoId, display);
+  }, [repoId, display]);
   const projects = useMemo(() => uniqueSorted(board.items.map((item) => item.project)), [board.items]);
   const priorities = useMemo(() => uniqueSorted(board.items.map((item) => item.priority)), [board.items]);
   const visibleInitiatives = useMemo(() => {
@@ -196,6 +205,7 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
   }, []);
 
   return (
+    <GraphIconItems.Provider value={iconItems}>
     <div className="snoboard-graph relative h-full w-full" aria-label="Dependency graph">
       <ReactFlow
         nodes={flowNodes}
@@ -294,6 +304,7 @@ function GraphCanvas({ board }: { board: BoardPayload }) {
         ) : null}
       </ReactFlow>
     </div>
+    </GraphIconItems.Provider>
   );
 }
 
@@ -358,12 +369,14 @@ function uniqueSorted(values: readonly string[]): string[] {
 
 function InitiativeNode({ data }: NodeProps<InitiativeFlowNode>) {
   const detailsHref = initiativeDetailsPath(useRepoId(), data.initiativeId);
+  const iconItem = useContext(GraphIconItems).get(data.initiativeId);
   return (
     <NodeStatusIndicator status={indicatorFor(data)}>
       <BaseNode className="h-full w-full">
         <Handle type="target" position={Position.Left} />
         <BaseNodeHeader className="px-3 pt-1.5 pb-0">
-          <BaseNodeHeaderTitle className="min-w-0 truncate font-mono text-xs font-normal text-muted-foreground">
+          <BaseNodeHeaderTitle className="flex min-w-0 items-center gap-1 truncate font-mono text-xs font-normal text-muted-foreground">
+            {iconItem !== undefined ? <ItemIcon item={iconItem} testId={`node-icon-${data.id}`} /> : null}
             <a href={detailsHref} className="nodrag nopan hover:underline" onClick={(event) => event.stopPropagation()}>
               {data.id}
             </a>

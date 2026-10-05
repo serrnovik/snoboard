@@ -9,6 +9,7 @@ import { phaseProgress, priorityVariant, showsBranchBadge } from "@/features/boa
 import { IssueCount } from "@/features/issues/IssueBadge";
 import { readinessPending, type CommittedState } from "@/features/board/effective";
 import { PeopleRow } from "@/features/people/People";
+import { ItemIcon, LabelChip, useDisplay } from "@/features/icons/display";
 
 const blockedBadgeClass =
   "border-amber-600/50! bg-amber-500/10! text-amber-800! dark:border-amber-400/50! dark:bg-amber-400/10! dark:text-amber-200!";
@@ -51,6 +52,7 @@ export function BoardCard({
   const pendingSuffix = readyPending ? " (pending)" : "";
   const branch = showsBranchBadge(item.sourceRef, defaultBranch);
   const age = formatAge(item.updatedAt);
+  const projectName = useDisplay().projects[item.project]?.name ?? item.project;
 
   return (
     <article
@@ -61,7 +63,10 @@ export function BoardCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="font-mono text-xs text-muted-foreground">{item.id}</p>
+          <p className="flex items-center gap-1 font-mono text-xs text-muted-foreground">
+            <ItemIcon item={item} testId={`card-icon-${item.id}`} />
+            <span className="min-w-0 truncate">{item.id}</span>
+          </p>
           <h3 className="text-sm font-medium leading-snug">
             <a
               href={`?open=${encodeURIComponent(item.id)}`}
@@ -81,7 +86,7 @@ export function BoardCard({
         </Badge>
       </div>
       <p className="flex justify-between gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">{item.project}</span>
+        <span className="min-w-0 truncate">{projectName}</span>
         {age !== null ? (
           <time dateTime={item.updatedAt} title={`Last change ${item.updatedAt}`} className="shrink-0">
             {age === "now" ? "changed just now" : `changed ${age} ago`}
@@ -93,7 +98,7 @@ export function BoardCard({
         <ul className="flex flex-wrap gap-1">
           {item.labels.map((label) => (
             <li key={label}>
-              <Badge variant="secondary">{label}</Badge>
+              <LabelChip label={label} />
             </li>
           ))}
         </ul>

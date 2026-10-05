@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Icons: `.snoboard.yml` `projects: { <project>: { icon, name } }` and `labels: { <label>: { icon, color } }`, plus an
+  optional `icon` frontmatter field on an initiative (one or two emoji, or a repo-relative `.png` / `.svg` / `.webp` /
+  `.ico` up to 256 KB). Cards, the details header, graph nodes, the Project filter and the New initiative picker show
+  the initiative icon, else the project icon; label chips use the label icon and palette colour. Bad values are
+  validation warnings. Image icons come from the new `GET /api/repos/<repo>/icons/<encoded path>` (only referenced
+  paths, magic-byte checked, SVG as `<img>` only with a no-script CSP). New `setIcon` edit in the details panel.
+- The Project filter and the New initiative picker show how many initiatives are open per project.
+- Resizable details panel: drag (or arrow keys, Home/End) on its left edge, 360 px to 90% of the window, remembered in
+  the browser; double-click resets. Phones keep the full-width panel.
+
 - Create an issue from an initiative: **New issue** in the details panel creates a GitHub issue (with the person's own
   write token, with the connect-and-resume flow), a Forgejo issue or a Vikunja task (board token, signed with a footer),
   and queues its short ref as a `setIssues` edit. New endpoint `POST /api/repos/<repo>/issues/create` (CSRF, may-submit,

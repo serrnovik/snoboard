@@ -26,6 +26,8 @@ import { currentOpenId, goBackInDetails, initiativeIdOf, openStack, setOpenId } 
 import { useRepoId } from "@/features/repo/context";
 import { formatQualifiedId, initiativeDetailsPath, parseQualifiedId, shareUrl } from "@/lib/ids";
 import { boardPath, repoApi } from "@/lib/routes";
+import { PanelResizeHandle, usePanelWidth } from "./panel-width";
+import { ItemIcon, LabelChip, publishDisplay, readDisplay } from "@/features/icons/display";
 
 export type PullEnrichment = {
   state: string;
@@ -39,6 +41,8 @@ export type InitiativeDetails = BoardItem & {
   forge?: ForgeLinkConfig;
   prs?: Record<string, PullEnrichment>;
   people?: InitiativePeople;
+  /** Validated `.snoboard.yml` display settings, for the icon fallback and label chips. */
+  display?: unknown;
 };
 
 const DEFAULT_FORGE: ForgeLinkConfig = {
@@ -89,14 +93,27 @@ export function DetailsSheet({
   backTo?: string | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const panel = usePanelWidth();
   return (
     <Sheet open={openId !== null} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="w-full overflow-y-auto data-[side=right]:sm:max-w-xl!"
+        className="w-full gap-0 data-[side=right]:sm:max-w-[90vw]!"
+        style={panel.width === null ? undefined : { width: `${panel.width}px` }}
         data-testid="details-sheet"
       >
-        {openId !== null ? <InitiativeBody id={openId} variant="sheet" backTo={backTo} /> : null}
+        {panel.width !== null ? (
+          <PanelResizeHandle
+            width={panel.width}
+            min={panel.min}
+            max={panel.max}
+            onResize={panel.setWidth}
+            onReset={panel.reset}
+          />
+        ) : null}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {openId !== null ? <InitiativeBody id={openId} variant="sheet" backTo={backTo} /> : null}
+        </div>
       </SheetContent>
     </Sheet>
   );
@@ -114,6 +131,8 @@ function InitiativeBody({ id, variant, backTo = null }: { id: string; variant: "
   const repoId = useRepoId();
   const state = useInitiative(id);
   const title = state.data?.title ?? id;
+  // Basket-aware, so a pending icon change shows at once.
+  const iconItem = useBoardView()?.items.get(id) ?? state.data;
   const qualified = formatQualifiedId(repoId, id);
   return (
     <div className="flex flex-col gap-4" data-testid="initiative-details">
@@ -131,13 +150,19 @@ function InitiativeBody({ id, variant, backTo = null }: { id: string; variant: "
               Back to {backTo}
             </button>
           ) : null}
-          <SheetTitle>{title}</SheetTitle>
+          <SheetTitle className="flex items-center gap-2">
+            {iconItem != null ? <ItemIcon item={iconItem} className="size-5 text-lg" testId="details-icon" /> : null}
+            <span className="min-w-0">{title}</span>
+          </SheetTitle>
           <SheetDescription>{qualified}</SheetDescription>
         </SheetHeader>
       ) : (
         <header className="flex flex-col gap-1">
           <p className="font-mono text-xs text-muted-foreground">{qualified}</p>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+            {iconItem != null ? <ItemIcon item={iconItem} className="size-6" testId="details-icon" /> : null}
+            <span className="min-w-0">{title}</span>
+          </h1>
         </header>
       )}
       {state.phase === "loading" ? <p className="px-4 text-sm text-muted-foreground">Loading initiative…</p> : null}
@@ -170,8 +195,21 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
     effective?.committed !== undefined && effective.committed.status !== effective.status ? effective.status : null;
   const reportGroups = splitReports(item);
   const viewer = useReportViewer(item);
+  useEffect(() => {
+    if (item.display !== undefined) publishDisplay(repoId, readDisplay(item.display));
+  }, [repoId, item.display]);
+  const labels = effective?.labels ?? item.labels ?? [];
   return (
     <div className={variant === "sheet" ? "flex flex-col gap-4 px-4 pb-4" : "flex flex-col gap-4"}>
+      {labels.length > 0 ? (
+        <ul className="flex flex-wrap gap-1" aria-label="Labels" data-testid="details-labels">
+          {labels.map((label) => (
+            <li key={label}>
+              <LabelChip label={label} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <EditControls item={item} />
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">Summary</h2>

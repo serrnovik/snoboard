@@ -48,6 +48,16 @@ Open a card to see its summary, issues with their live title and open or closed 
 
 ![Details panel with edit controls, issues and links](docs/img/details.png)
 
+Drag the panel's left edge to make it wider or narrower (or focus the handle and use the arrow keys, Home and End).
+Double-click the handle to go back to the default width. The width is remembered in the browser.
+
+### Icons
+
+Give projects an emoji or a logo from the repository, and labels an emoji and a colour, in `.snoboard.yml`; an
+initiative can override its project icon with an `icon` frontmatter field. Icons show on cards, in the details panel,
+in graph nodes and in the project pickers, which also count open initiatives per project. See
+[docs/configuration.md](docs/configuration.md#icons).
+
 ### Reports
 
 Files under `<initiative folder>/reports/` (`phase-1.report.md`, `final.report.md` and their `.report.html` twins)

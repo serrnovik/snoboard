@@ -17,6 +17,8 @@ Snoboard reads `.snoboard.yml` from the repository root (the directory you pass 
 | `staleAfterDays` | `30` | Days after `updated` before validation emits a warning. Integer, zero or greater |
 | `reservedNumbers` | `[]` | Folder numbers that `next-number` and `new` skip when finding the highest number, e.g. parking-lot folders like `999-backlog` |
 | `forge` | GitHub `owner/name` with the file and pull request templates below | Where the board links initiative files and pull requests. `type` is `github`. `repo` looks like `owner/name` |
+| `projects` | `{}` | Per project folder: `icon` (emoji or repo image path) and `name` (display name). See [Icons](#icons) |
+| `labels` | `{}` | Per label: `icon` (emoji) and `color` (palette name). See [Icons](#icons) |
 
 ## Example
 
@@ -40,6 +42,38 @@ forge:
 ```
 
 Quote `fileUrl` and `prUrl` so YAML does not treat `{repo}` as a mapping. The tokens are `{repo}`, `{ref}`, `{path}`, and `{pr}`. Snoboard replaces each one when it builds a link. A partial `forge` mapping keeps the defaults for the keys you omit.
+
+## Icons
+
+Projects, initiatives and labels can carry an icon. All of it is optional and display-only.
+
+```yaml
+projects:
+  acme:
+    icon: "🧩"                  # one or two emoji
+    name: Acme                  # shown instead of the folder name
+  web:
+    icon: apps/web/public/favicon.svg   # repo-relative .png, .svg, .webp or .ico, at most 256 KB
+labels:
+  billing:
+    icon: "💳"                  # emoji only
+    color: green
+```
+
+- An initiative's own `icon` frontmatter field wins; otherwise the card uses its project's icon; otherwise none.
+- The board shows icons on cards (before the id), in the details header, in graph nodes, in the Project filter
+  and in the New initiative project picker. Label chips use the label's icon and colour.
+- `color` is one of `gray`, `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `teal`, `cyan`, `blue`,
+  `indigo`, `violet`, `purple`, `pink`, `rose`. Other CSS values are not accepted.
+- A bad `icon` or `color` is a **warning** from `snoboard validate`, never an error; the board then shows no icon.
+  In the working tree `validate` also warns when an image icon file is missing or larger than 256 KB.
+- Quote emoji in YAML (`"🧩"`) so editors and linters keep them as strings.
+
+Image icons are read from the git clone at the default branch (project icons) or at the commit the board shows for
+the initiative, through `GET /api/repos/<repo>/icons/<URL-encoded path>`. Only paths named in `.snoboard.yml`
+`projects` or in an initiative `icon` are answered; the bytes must be PNG, WebP, ICO or SVG and match the extension.
+SVG is only used as an `<img>` source and is served with `Content-Security-Policy: default-src 'none'; style-src
+'unsafe-inline'` and `nosniff`, so it cannot run scripts. Answers are cached privately for an hour.
 
 ## Issues
 

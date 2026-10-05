@@ -7,3 +7,13 @@ statuses: [idea, planned, in-progress, review, done, parked, dropped]
 doneStatuses: [done]
 priorities: [p0, p1, p2, p3]
 staleAfterDays: 30
+projects:
+  acme:
+    icon: "🧩"
+    name: Acme
+  platform:
+    icon: "🛠️"
+labels:
+  signup:
+    icon: "✍️"
+    color: blue

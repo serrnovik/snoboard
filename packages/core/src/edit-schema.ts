@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ASSET_PATH, ATTACHMENT_TYPES, extensionFor, MAX_ATTACHMENT_BYTES, NEW_INITIATIVE_REF } from "./attachments.js";
 import { MAX_ISSUE_REFS, parseIssueRef } from "./issues.js";
 import { LinkSchema, MAX_LINKS } from "./links.js";
+import { MAX_ICON_LENGTH, parseIcon } from "./icons.js";
 
 // No Node imports here: the browser bundle (snoboard/browser) uses this schema.
 export const PROJECT_NAME = /^[a-z0-9_][a-z0-9_-]*$/;
@@ -49,6 +50,19 @@ export const EditSchema = z.discriminatedUnion("kind", [
     id: z.string().regex(INITIATIVE_ID),
     from: z.string(),
     to: z.string(),
+  }),
+  z.object({
+    kind: z.literal("setIcon"),
+    id: z.string().regex(INITIATIVE_ID),
+    /** Current `icon`; empty when the initiative has none. */
+    from: z.string().max(MAX_ICON_LENGTH),
+    /** New `icon`; empty removes the field. */
+    to: z
+      .string()
+      .max(MAX_ICON_LENGTH)
+      .refine((value) => value === "" || parseIcon(value) !== undefined, {
+        message: "must be one or two emoji or a repo-relative .png, .svg, .webp or .ico path",
+      }),
   }),
   z.object({
     kind: z.literal("setLabels"),

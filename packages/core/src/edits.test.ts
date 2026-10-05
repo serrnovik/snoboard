@@ -397,3 +397,32 @@ describe("EditSchema", () => {
     expect(result).toEqual({ error: "invalid edit" });
   });
 });
+describe("setIcon", () => {
+  const file = (yaml: string) => `---\n${yaml}---\n\n# Alpha\n`;
+  const base = "id: acme-001\ntitle: Alpha\nstatus: idea\npriority: p2\nupdated: 2026-09-01\n";
+
+  it("adds, replaces and removes the icon", () => {
+    const added = applyEdit(file(base), { kind: "setIcon", id: "acme-001", from: "", to: "🚀" }, config, TODAY);
+    expect(added).toEqual({ text: file(base.replace("2026-09-01", TODAY) + "icon: 🚀\n") });
+    if (!("text" in added)) throw new Error("expected text");
+    const replaced = applyEdit(added.text, { kind: "setIcon", id: "acme-001", from: "🚀", to: "assets/icon.png" }, config, TODAY);
+    expect("text" in replaced && replaced.text.includes("icon: assets/icon.png")).toBe(true);
+    if (!("text" in replaced)) throw new Error("expected text");
+    const removed = applyEdit(replaced.text, { kind: "setIcon", id: "acme-001", from: "assets/icon.png", to: "" }, config, TODAY);
+    expect("text" in removed && removed.text.includes("icon")).toBe(false);
+  });
+
+  it("refuses a stale from and an invalid icon", () => {
+    expect(applyEdit(file(base), { kind: "setIcon", id: "acme-001", from: "🧩", to: "🚀" }, config, TODAY)).toEqual({
+      error: "stale",
+    });
+    expect(applyEdit(file(base), { kind: "setIcon", id: "acme-001", from: "", to: "../x.png" }, config, TODAY)).toEqual({
+      error: "invalid edit",
+    });
+    expect(EditSchema.safeParse({ kind: "setIcon", id: "acme-001", from: "", to: "text" }).success).toBe(false);
+  });
+
+  it("summarizes the change", () => {
+    expect(summarizeEdit({ kind: "setIcon", id: "acme-001", from: "", to: "🚀" })).toBe("acme-001: icon (none) -> 🚀");
+  });
+});

@@ -53,6 +53,7 @@ import {
   type ColumnSort,
 } from "@/features/board/columns";
 import { publishBoardView } from "@/features/board/view-store";
+import { openCountsByProject, publishDisplay, readDisplay } from "@/features/icons/display";
 
 const POLL_MS = 60_000;
 const EMPTY_MESSAGE = "No Snoboard initiatives yet — run `snoboard new`";
@@ -185,6 +186,12 @@ function BoardBody({
   const filtered = query.hideStale ? matching.filter((item) => !staleIds.has(item.id)) : matching;
   const staleCount = matching.length - matching.filter((item) => !staleIds.has(item.id)).length;
   const projects = uniqueSorted(payload.items.map((item) => item.project));
+  const display = useMemo(() => readDisplay(payload.config), [payload.config]);
+  useEffect(() => {
+    publishDisplay(repoId, display);
+  }, [repoId, display]);
+  // Basket-aware: a pending move to done already lowers the count.
+  const openCounts = openCountsByProject(effective, payload.config.doneStatuses, projects);
   const labels = uniqueSorted(payload.items.flatMap((item) => item.labels ?? []));
   const defaultBranch = defaultBranchName(payload.refs);
   const ageFor = (status: string): ClosedAge =>
@@ -223,6 +230,7 @@ function BoardBody({
         <PageActionsPortal>
           <NewInitiativeDialog
             projects={projects}
+            openCounts={openCounts}
             initiatives={payload.items.map((item) => ({
               id: item.id,
               title: item.title,
@@ -243,6 +251,7 @@ function BoardBody({
         <Filters
           query={query}
           projects={projects}
+          openCounts={openCounts}
           labels={labels}
           priorities={payload.config.priorities}
           staleCount={staleCount}

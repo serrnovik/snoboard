@@ -37,6 +37,9 @@ export type BoardConfig = {
   priorities: string[];
   doneStatuses: string[];
   staleAfterDays?: number;
+  /** Validated `.snoboard.yml` display settings (icons, names, label colours). */
+  projects?: Record<string, { icon?: string; name?: string }>;
+  labels?: Record<string, { icon?: string; color?: string }>;
 };
 
 export type ProposalField = {

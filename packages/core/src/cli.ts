@@ -11,6 +11,7 @@ import { buildSnapshot, type BoardItem } from "./merge.js";
 import { parseInitiativeFile, type ParsedFile } from "./parse.js";
 import { fixInitiativeText, formatFixEvent, type FixEvent } from "./fix.js";
 import { validate, type ValidationIssue } from "./validate.js";
+import { MAX_ICON_BYTES, parseIcon } from "./icons.js";
 import { VERSION } from "./version.js";
 
 const HELP = `snoboard — read and check initiative documents
@@ -290,6 +291,7 @@ async function validateCommand(values: FlagValues, io: CliIo): Promise<number> {
       : await readWorkingTree(repoDir, config);
   files.sort((left, right) => left.path.localeCompare(right.path));
   let issues = validate(files, config);
+  if (values.ref === undefined) issues.push(...(await iconFileIssues(repoDir, files, config)));
   const changedSince = values["changed-since"];
   if (changedSince !== undefined) {
     const changed = await changedPaths(repoDir, changedSince, config, io.onGit);
@@ -302,6 +304,34 @@ async function validateCommand(values: FlagValues, io: CliIo): Promise<number> {
     for (const issue of issues) io.stdout(formatIssue(issue));
   }
   return issues.some((issue) => issue.severity === "error") ? 1 : 0;
+}
+
+/** Working tree only: image icons must be regular files inside the repository, at most 256 KB. */
+async function iconFileIssues(repoDir: string, files: readonly ParsedFile[], config: Config): Promise<ValidationIssue[]> {
+  const wanted: { path: string; field: string; icon: string }[] = [];
+  for (const [project, display] of Object.entries(config.projects ?? {})) {
+    const icon = parseIcon(display.icon);
+    if (icon?.kind === "image") wanted.push({ path: ".snoboard.yml", field: `projects.${project}.icon`, icon: icon.path });
+  }
+  for (const file of files) {
+    if (file.kind !== "initiative") continue;
+    const icon = parseIcon(file.frontmatter.icon);
+    if (icon?.kind === "image") wanted.push({ path: file.path, field: "icon", icon: icon.path });
+  }
+  const issues: ValidationIssue[] = [];
+  for (const entry of wanted) {
+    const absolute = path.resolve(repoDir, entry.icon);
+    let message: string | undefined;
+    try {
+      const info = await stat(absolute);
+      if (!info.isFile()) message = `icon file "${entry.icon}" is not a file`;
+      else if (info.size > MAX_ICON_BYTES) message = `icon file "${entry.icon}" is larger than 256 KB`;
+    } catch {
+      message = `icon file "${entry.icon}" was not found`;
+    }
+    if (message !== undefined) issues.push({ path: entry.path, field: entry.field, message, severity: "warning" });
+  }
+  return issues;
 }
 
 function formatIssue(issue: ValidationIssue): string {

@@ -24,6 +24,7 @@ import {
 import { useBasket } from "@/features/basket/store";
 import { useImageAttachments } from "@/features/attachments/images";
 import { useRepoId } from "@/features/repo/context";
+import { parseIcon, ProjectIcon, useDisplay, type BoardDisplay } from "@/features/icons/display";
 
 // Same rules as the server's edit schema (packages/core/src/edit-schema.ts).
 const PROJECT_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -54,14 +55,25 @@ export function suggestSlug(title: string): string {
     .replace(/-+$/g, "");
 }
 
+/** Option text for the native project picker: emoji icon, display name and open count. */
+export function projectOptionText(project: string, display: BoardDisplay, count: number | undefined): string {
+  const icon = parseIcon(display.projects[project]?.icon);
+  const prefix = icon?.kind === "emoji" ? `${icon.value} ` : "";
+  const name = display.projects[project]?.name ?? project;
+  return `${prefix}${name}${count === undefined ? "" : ` (${count} open)`}`;
+}
+
 export function NewInitiativeDialog({
   projects,
+  openCounts,
   initiatives,
   statuses,
   priorities,
   defaultProject,
 }: {
   projects: readonly string[];
+  /** Open initiatives per project. */
+  openCounts?: ReadonlyMap<string, number>;
   initiatives: readonly InitiativeChoice[];
   statuses: readonly string[];
   priorities: readonly string[];
@@ -70,6 +82,7 @@ export function NewInitiativeDialog({
 }) {
   const repoId = useRepoId();
   const basket = useBasket(repoId);
+  const display = useDisplay();
   const attachments = useImageAttachments({ repoId });
   const [open, setOpen] = useState(false);
   const formId = useId();
@@ -197,7 +210,10 @@ export function NewInitiativeDialog({
               </p>
             ) : null}
             <label className={fieldClass} htmlFor={`${formId}-project`}>
-              Project
+              <span className="flex items-center gap-1.5">
+                Project
+                {projectChoice !== NEW_PROJECT ? <ProjectIcon project={projectChoice} /> : null}
+              </span>
               <select
                 id={`${formId}-project`}
                 className={selectClass}
@@ -206,7 +222,7 @@ export function NewInitiativeDialog({
               >
                 {projects.map((entry) => (
                   <option key={entry} value={entry}>
-                    {entry}
+                    {projectOptionText(entry, display, openCounts?.get(entry))}
                   </option>
                 ))}
                 <option value={NEW_PROJECT}>+ New project…</option>

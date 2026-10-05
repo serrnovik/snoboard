@@ -32,7 +32,7 @@ export {
   type ReportEntry,
   type ReportFormat,
 } from "./reports.js";
-export { ConfigSchema, loadConfig, type Config } from "./config.js";
+export { ConfigSchema, loadConfig, type Config, type LabelDisplay, type ProjectDisplay } from "./config.js";
 export {
   InitiativeFrontmatterSchema,
   PhaseSchema,
@@ -76,8 +76,24 @@ export {
   uniqueAssetPath,
   type AttachmentType,
 } from "./attachments.js";
+export {
+  detectIconType,
+  iconProblem,
+  iconTypeForPath,
+  ICON_IMAGE_TYPES,
+  isEmojiIcon,
+  isIconPath,
+  isLabelColor,
+  LABEL_COLORS,
+  MAX_ICON_BYTES,
+  parseIcon,
+  resolveIcon,
+  type IconImageType,
+  type IconValue,
+  type LabelColor,
+} from "./icons.js";
 export { parseInitiativeFile, type ParsedFile } from "./parse.js";
-export { validate, type ValidationIssue } from "./validate.js";
+export { configIconIssues, validate, type ValidationIssue } from "./validate.js";
 export {
   blockedBy,
   blockedChain,
