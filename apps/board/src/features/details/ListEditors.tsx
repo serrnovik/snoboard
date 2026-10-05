@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useBasket } from "@/features/basket/store";
 import { IssueBadge, normalizeIssues, type IssueView } from "@/features/issues/IssueBadge";
+import { NewIssueDialog, type CreateProviderId } from "@/features/issues/NewIssueDialog";
 import { useRepoId } from "@/features/repo/context";
 
 type Link = { title: string; url: string };
@@ -45,12 +46,19 @@ export function IssuesEditor({
   id,
   issues,
   linkConfig = {},
+  create,
 }: {
   id: string;
   issues: unknown;
   linkConfig?: IssueLinkConfig;
+  /** "New issue": trackers this person may create in, plus what prefills the dialog. */
+  create?: { providers: readonly CreateProviderId[]; csrf: string | undefined; title: string; summary: string };
 }) {
-  const basket = useBasket(useRepoId());
+  const repoId = useRepoId();
+  const basket = useBasket(repoId);
+  // Issues created in this panel: their link is known before the next board refresh.
+  const [created, setCreated] = useState<{ ref: string; url: string }[]>([]);
+  const [notice, setNotice] = useState<{ ref: string; url: string } | null>(null);
   const inputId = useId();
   const views = normalizeIssues(issues);
   const original = views.map((view) => view.raw);
@@ -80,7 +88,7 @@ export function IssuesEditor({
         <ul className="flex flex-col gap-1" aria-label="Issue refs">
           {shown.map((raw) => (
             <li key={raw} data-testid="issue-chip" className="flex min-w-0 items-center justify-between gap-2 rounded-md border px-2 py-1">
-              <IssueBadge issue={withLink(views.find((view) => view.raw === raw) ?? unknownIssue(raw), linkConfig)} />
+              <IssueBadge issue={withLink(views.find((view) => view.raw === raw) ?? createdIssue(raw, created), linkConfig)} />
               <button
                 type="button"
                 aria-label={`Remove ${raw}`}
@@ -121,8 +129,39 @@ export function IssuesEditor({
           {problem}
         </p>
       ) : null}
+      {create !== undefined && create.providers.length > 0 ? (
+        <NewIssueDialog
+          repoId={repoId}
+          initiative={{ id, title: create.title, summary: create.summary }}
+          providers={create.providers}
+          csrf={create.csrf}
+          onCreated={(issue) => {
+            setCreated((current) => [...current.filter((entry) => entry.ref !== issue.ref), issue]);
+            if (!shown.includes(issue.ref)) save([...shown, issue.ref]);
+            setNotice(issue);
+          }}
+        />
+      ) : null}
+      {notice !== null ? (
+        <p role="status" data-testid="issue-created" className="text-xs text-muted-foreground">
+          Created{" "}
+          {notice.url.length > 0 ? (
+            <a href={notice.url} target="_blank" rel="noopener noreferrer" className="underline">
+              {notice.ref}
+            </a>
+          ) : (
+            notice.ref
+          )}
+          . Added to the basket; submit to link it.
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function createdIssue(raw: string, created: readonly { ref: string; url: string }[]): IssueView {
+  const match = created.find((entry) => entry.ref === raw);
+  return match === undefined ? unknownIssue(raw) : { raw, url: match.url, title: "", state: "open" };
 }
 
 function unknownIssue(raw: string): IssueView {

@@ -5,7 +5,7 @@ import { findActiveRepo, listActiveRepos, type RepoConfig } from "../repos-confi
 import { DEFAULT_REPO_ID, getConfig } from "../store.js";
 import { createGithubIssueProvider } from "./github.js";
 import { createIssueRegistry, ISSUE_CACHE_TTL_MS, type IssueRegistry } from "./registry.js";
-import type { IssueProvider, IssueRef, IssueState } from "./provider.js";
+import type { IssueProject, IssueProvider, IssueRef, IssueState } from "./provider.js";
 import { createForgejoProvider, forgejoBase, forgejoRepo } from "./forgejo.js";
 import { createVikunjaProvider, vikunjaBase } from "./vikunja.js";
 
@@ -90,6 +90,51 @@ function githubProvider(repoId: string, repo: RepoConfig | undefined, forgeRepo:
   });
 }
 
+/** Providers that can create issues for this repo, built fresh so a rotated token file is read again. */
+export function issueCreators(repoId: string): IssueProvider[] {
+  return providersFor(repoId).filter((provider) => provider.createIssue !== undefined);
+}
+
+/** Ids of the providers that can create issues (`gh`, `fj`, `vikunja`). No secrets. */
+export function createProviderIds(repoId: string): string[] {
+  return issueCreators(repoId).map((provider) => provider.id);
+}
+
+const PROJECT_CACHE_MS = 5 * 60 * 1000;
+const projectCache = new Map<string, { expires: number; signature: string; projects: IssueProject[] }>();
+
+export function resetVikunjaProjectCache(): void {
+  projectCache.clear();
+}
+
+/** Vikunja projects for this repo's token, cached for five minutes. Empty when creation is off. */
+export async function vikunjaProjects(repoId: string, signal: AbortSignal): Promise<IssueProject[]> {
+  const provider = issueCreators(repoId).find((entry) => entry.id === "vikunja");
+  if (provider?.listProjects === undefined) return [];
+  const signature = JSON.stringify(findActiveRepo(repoId)?.issues?.vikunja ?? null);
+  const cached = projectCache.get(repoId);
+  if (cached !== undefined && cached.signature === signature && cached.expires > Date.now()) return cached.projects;
+  const projects = await provider.listProjects(signal);
+  projectCache.set(repoId, { expires: Date.now() + PROJECT_CACHE_MS, signature, projects });
+  return projects;
+}
+
+/** Default Vikunja project for an initiative's project: `projectMap[project]`, else `projectId`. */
+export function vikunjaProjectFor(repoId: string, initiativeProject: string | undefined): number | undefined {
+  const vikunja = findActiveRepo(repoId)?.issues?.vikunja;
+  if (vikunja === undefined) return undefined;
+  const map = vikunja.projectMap ?? {};
+  const mapped = initiativeProject !== undefined && Object.hasOwn(map, initiativeProject) ? map[initiativeProject] : undefined;
+  return mapped ?? vikunja.projectId;
+}
+
+/** Projects the board may write tasks to: the default, the mapped ones, and any the token lists. */
+export function vikunjaConfiguredProjects(repoId: string): number[] {
+  const vikunja = findActiveRepo(repoId)?.issues?.vikunja;
+  if (vikunja === undefined) return [];
+  return [...new Set([...(vikunja.projectId === undefined ? [] : [vikunja.projectId]), ...Object.values(vikunja.projectMap ?? {})])];
+}
+
 function providersFor(repoId: string): IssueProvider[] {
   const repo = findActiveRepo(repoId);
   const forgeRepo = readForgeRepo(repoId);
@@ -112,6 +157,8 @@ function providersFor(repoId: string): IssueProvider[] {
       createVikunjaProvider({
         baseUrl: vikunja.baseUrl,
         ...(vikunja.tokenFile === undefined ? {} : { tokenFile: vikunja.tokenFile }),
+        ...(vikunja.projectId === undefined ? {} : { projectId: vikunja.projectId }),
+        ...(vikunja.projectMap === undefined ? {} : { projectMap: vikunja.projectMap }),
       }),
     );
   }

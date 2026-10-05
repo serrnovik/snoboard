@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import type { IssueProvider, IssueRef, IssueState } from "./provider.js";
+import { createFailure, positiveInteger, snoboardFooter, transportFailure } from "./create-common.js";
+import { IssueCreateError, type CreatedIssue, type IssueProvider, type IssueRef, type IssueState, type NewIssue } from "./provider.js";
 import { vikunjaBase } from "./vikunja.js";
 
 const REPO = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
@@ -102,8 +103,43 @@ export function createForgejoProvider(input: {
     };
   }
 
+  async function createIssue(issue: NewIssue, _credential: unknown, signal: AbortSignal): Promise<CreatedIssue> {
+    const repo = defaultRepo === undefined ? undefined : REPO.exec(defaultRepo);
+    if (base === undefined || token === undefined || !repo?.[1] || !repo[2]) {
+      throw new IssueCreateError("not_found", "Forgejo issue creation is not configured");
+    }
+    const requestHeaders = headers(token);
+    requestHeaders.set("Content-Type", "application/json");
+    let response: Response;
+    try {
+      response = await fetchImpl(`${base}/api/v1/repos/${repo[1]}/${repo[2]}/issues`, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify({ title: issue.title, body: snoboardFooter(issue.body, issue.createdBy, issue.initiativeId) }),
+        redirect: "error",
+        signal,
+      });
+    } catch (error) {
+      throw transportFailure("Forgejo", error);
+    }
+    if (!response.ok) {
+      throw await createFailure("Forgejo", response, [token], "Forgejo token lacks issue write scope (needs issue: Read and Write)");
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new IssueCreateError("upstream", "Forgejo answered without an issue");
+    }
+    const number = isRecord(body) ? positiveInteger(body.number) : undefined;
+    if (number === undefined || !isRecord(body)) throw new IssueCreateError("upstream", "Forgejo answered without an issue number");
+    const target = { owner: repo[1], name: repo[2], number: String(number) };
+    return { ref: `fj#${number}`, url: htmlUrl(body.html_url, issueUrl(target)) };
+  }
+
   return {
     id: "fj",
+    ...(base !== undefined && token !== undefined && defaultRepo !== undefined ? { createIssue } : {}),
     parseRef(ref) {
       return base !== undefined && locate(ref, defaultRepo) !== undefined;
     },

@@ -24,6 +24,17 @@ adds `gh#12` (this repository) or `gh:owner/name#12`; pasting a task URL from th
 `vj:45`. A URL from any other host is refused. Chips link to the tracker even when the state is unknown. The x on a chip removes it. Each change replaces the whole list
 in one `setIssues` edit.
 
+**New issue** (shown when at least one tracker can create issues for you) opens a small dialog: tracker, title
+(prefilled with the initiative title) and a markdown description (prefilled with a link to the initiative on the board
+and its summary); for Vikunja also a project, preselected from `projectMap` for the initiative's project. **Create** creates the issue right away with `POST /api/repos/<repo>/issues/create`
+(`{ provider, initiativeId, title, body, csrf }`, title 1 to 256 characters on one line, body at most 20 000
+characters) and answers `{ ref, url }` with a short ref (`gh#12`, `fj#12`, `vj:45`). The ref is added to the basket as
+a `setIssues` edit and its chip links to the new issue at once; it is written to the initiative with your next submit.
+GitHub issues are created with your own GitHub token: without one, the board sends you to connect GitHub and creates
+the issue when you come back. Forgejo and Vikunja use the board's token (see
+[configuration.md](configuration.md#creating-issues)). The route uses the same checks as submit (origin, CSRF token,
+may-submit) and allows 20 new issues per person per hour.
+
 **Links** is a small table of title and URL rows. **Save links** checks every row (title 1 to 120
 characters, `https:` or `mailto:` URL) and queues one `setLinks` edit. See [schema.md](schema.md#links).
 

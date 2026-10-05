@@ -43,7 +43,7 @@ Quote `fileUrl` and `prUrl` so YAML does not treat `{repo}` as a mapping. The to
 
 ## Issues
 
-Issue trackers: an initiative can list issue refs in its frontmatter (`gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456`). The board shows a count on the card without calling the tracker. Opening the initiative loads each title, whether it is open or closed, and a link. A state Snoboard cannot read is a plain link. Snoboard never creates, updates, or deletes issues.
+Issue trackers: an initiative can list issue refs in its frontmatter (`gh#123`, `gh:owner/name#123`, `fj#123`, `fj:owner/name#123`, `vj:456`). The board shows a count on the card without calling the tracker. Opening the initiative loads each title, whether it is open or closed, and a link. A state Snoboard cannot read is a plain link. Snoboard never updates or deletes issues; with editing on it can create one from an initiative (see [Creating issues](#creating-issues)).
 
 Each repository enables its own trackers. A provider that is not configured for that repository leaves the ref as text. One repository's token is never sent for another.
 
@@ -65,7 +65,7 @@ Forgejo and Gitea share the same API.
 | --- | --- |
 | `baseUrl` | Forgejo site origin, for example `https://forge.example.com`. Must be `https`. `http` is allowed only when the host is `localhost`, `127.0.0.1`, or `::1` |
 | `repo` | `owner/name` used for `fj#123`. `fj:owner/name#123` names another repository on the same site |
-| `tokenFile` | Optional. Path to a file that contains a read-only API token. The token is read once at startup. Without it, `fj` refs link to `{baseUrl}/{owner}/{name}/issues/{n}`, the state shows as unknown, and Snoboard never calls Forgejo |
+| `tokenFile` | Optional. Path to a file that contains an API token. For reading only, give it `issue: Read` and `repository: Read`; to create issues from the board, `issue: Read and Write` and `repository: Read`. Without it, `fj` refs link to `{baseUrl}/{owner}/{name}/issues/{n}`, the state shows as unknown, and Snoboard never calls Forgejo |
 
 Snoboard calls `GET {baseUrl}/api/v1/repos/{owner}/{name}/issues/{n}` with `Authorization: token ...`. Pull requests share the issue numbers, so the same call answers for `/pulls/{n}`. The state is `open` or `closed`; anything else, a missing issue or a rejected token is unknown. `html_url` is used only when it is on `baseUrl`. Redirects are refused. Pasting `https://{host}/{owner}/{name}/issues/{n}` or `/pulls/{n}` from the configured site stores `fj#{n}` for the configured repo and `fj:{owner}/{name}#{n}` for others; URLs from other hosts are rejected.
 
@@ -82,9 +82,11 @@ issues:
 | Key | Meaning |
 | --- | --- |
 | `baseUrl` | Vikunja site origin, for example `https://tasks.example`. Must be `https`. `http` is allowed only when the host is `localhost`, `127.0.0.1`, or `::1` |
-| `tokenFile` | Optional. Path to a file that contains the API token. The token is read once at startup. Without it, `vj:` refs link to `{baseUrl}/tasks/{id}`, the state shows as unknown, and Snoboard never calls Vikunja |
+| `tokenFile` | Optional. Path to a file that contains the API token. Without it, `vj:` refs link to `{baseUrl}/tasks/{id}`, the state shows as unknown, and Snoboard never calls Vikunja |
+| `projectId` | Optional. Positive integer: the default project for new tasks |
+| `projectMap` | Optional. Initiative project folder to Vikunja project id, for example `{ app: 23 }`. Preselected in **New issue** for initiatives of that project; `projectId` is the fallback. With a token, `projectId` or `projectMap` enables task creation |
 
-The token needs permission to read tasks only. Do not grant permission to create, update, or delete tasks.
+For reading, the token needs permission to read tasks only. To create tasks from the board, it also needs to create tasks in `projectId`. Never grant update or delete.
 
 Snoboard calls `GET /api/v1/tasks/{id}` for each `vj:{id}` (or `vikunja:{id}`) ref. Search uses `GET /api/v1/tasks/all?s=` and keeps at most 10 tasks. A task with `done: true` is closed. Any other task is open. A missing task or a rejected token is shown as unknown.
 
@@ -93,9 +95,28 @@ issues:
   vikunja:
     baseUrl: https://tasks.example
     tokenFile: /var/run/secrets/vikunja-token # optional: omit for links only
+    projectId: 4 # optional: default project for new tasks
+    projectMap: { app: 23 } # optional: initiative project -> Vikunja project
 ```
 
 Chips always link when Snoboard can build the URL without the network: `gh:owner/name#n` always, `gh#n` when the repository has a GitHub repo, `fj#n` and `fj:owner/name#n` when `forgejo` is set, and `vj:n` when `vikunja.baseUrl` is set. `GET /api/repos/{id}/edit-config` returns these settings as `issues: { githubRepo, vikunjaBaseUrl, forgejoBaseUrl, forgejoRepo }` (never tokens), so the editor can turn a pasted URL into a short ref.
+
+### Creating issues
+
+With editing on (`SNOBOARD_EDIT_MODES`), people who may submit edits can create an issue from the details panel
+(**New issue**). The new ref is queued as a `setIssues` edit, so it lands in the initiative with the next submit.
+`GET /api/repos/{id}/edit-config` lists the trackers this person may use as `createProviders` (ids only).
+
+| Tracker | Enabled when | Credential and scope |
+| --- | --- | --- |
+| GitHub (`gh`) | The repository has a GitHub repo (as for reading) and the person signed in with GitHub, or with Cloudflare Access and `SNOBOARD_GITHUB_WRITE_CONNECT=true` | The person's own GitHub write token, the same one used to submit (`repo`, or `public_repo` for public repositories). Never the read token or the bot token. Without one, the board asks them to connect GitHub and then creates the issue |
+| Forgejo (`fj`) | `issues.forgejo.tokenFile` is readable | The board's Forgejo token with `issue: Read and Write` and `repository: Read`. A `403` is reported as "token lacks issue write scope" |
+| Vikunja (`vj`) | `issues.vikunja.tokenFile` is readable and `projectId` or `projectMap` is set | The board's Vikunja token, allowed to list projects and create tasks in them. The dialog lists projects from `GET {baseUrl}/api/v1/projects` (cached five minutes, only id and title reach the browser, through `GET /api/repos/{id}/issues/vikunja-projects?initiative=<id>`) and preselects the mapped project. The server accepts only a configured project or one the token lists |
+
+Calls: GitHub `POST /repos/{owner}/{name}/issues`, Forgejo `POST {baseUrl}/api/v1/repos/{owner}/{name}/issues`,
+Vikunja `PUT {baseUrl}/api/v1/projects/{project}/tasks`. Forgejo and Vikunja issues are written by the board's
+token, so their text ends with `Created from Snoboard by <person> for <initiative id>`. Token files are read again
+for every creation, so a rotated token is picked up without a restart.
 
 ## Deployed version
 
@@ -120,7 +141,7 @@ repository still reads its own `.snoboard.yml` (or `configPath`).
 | `edit.directBranch` | with `direct` | Branch `direct` updates |
 | `edit.botTokenFile` | no | Bot token for password and Cloudflare Access users, for this repository only |
 | `edit.githubWriteScope` | no | `repo` or `public_repo` for the GitHub write grant. Default: `SNOBOARD_GITHUB_WRITE_SCOPE` |
-| `issues` | no | Trackers for this repository only. `github.repo` is `owner/name` (same as `forge.repo` so the read token is sent). `forgejo` is `baseUrl`, `repo` and an optional `tokenFile`. `vikunja` is `baseUrl` and an optional `tokenFile` |
+| `issues` | no | Trackers for this repository only. `github.repo` is `owner/name` (same as `forge.repo` so the read token is sent). `forgejo` is `baseUrl`, `repo` and an optional `tokenFile`. `vikunja` is `baseUrl`, an optional `tokenFile` and an optional `projectId` (for creating tasks) |
 
 ```yaml
 repos:

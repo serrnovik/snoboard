@@ -22,6 +22,8 @@ export type ClientEditConfig = {
   forgeRepo?: string;
   /** Tracker link settings (no tokens): Vikunja/Forgejo sites and the repos `gh#n` / `fj#n` mean. */
   issues?: IssueLinks;
+  /** Trackers this person may create issues in (`gh` uses their own GitHub token). */
+  createProviders?: ("gh" | "fj" | "vikunja")[];
 };
 
 const EMPTY_CONFIG: ClientEditConfig = {
@@ -89,6 +91,14 @@ export function parseEditConfig(value: unknown): ClientEditConfig {
       ? { forgeRepo: value.forgeRepo }
       : {}),
     ...(isRecord(value.issues) ? { issues: parseIssueLinks(value.issues) } : {}),
+    ...(Array.isArray(value.createProviders)
+      ? {
+          createProviders: value.createProviders.filter(
+            (entry, index, list): entry is "gh" | "fj" | "vikunja" =>
+              (entry === "gh" || entry === "fj" || entry === "vikunja") && list.indexOf(entry) === index,
+          ),
+        }
+      : {}),
   };
 }
 

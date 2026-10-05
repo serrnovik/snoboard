@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Create an issue from an initiative: **New issue** in the details panel creates a GitHub issue (with the person's own
+  write token, with the connect-and-resume flow), a Forgejo issue or a Vikunja task (board token, signed with a footer),
+  and queues its short ref as a `setIssues` edit. New endpoint `POST /api/repos/<repo>/issues/create` (CSRF, may-submit,
+  20 per person per hour), new `createProviders` in `edit-config`, and new `issues.vikunja.projectId` / `projectMap` with a
+  project picker fed by `GET /api/repos/<repo>/issues/vikunja-projects`.
 - Forgejo (and Gitea) issue refs: `fj#12` for the repository's configured Forgejo repo and `fj:owner/name#12`
   for another repo on the same site. Per-repo `issues.forgejo: { baseUrl, repo, tokenFile? }`: links only without a
   token, live open/closed state with one. Pasted Forgejo issue and pull request URLs become short refs, and

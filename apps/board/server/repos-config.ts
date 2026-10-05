@@ -39,7 +39,9 @@ export type RepoEditConfig = {
 export type RepoIssuesConfig = {
   github?: { repo: string };
   /** Without `tokenFile`, refs link to the site and state stays unknown (no API calls). */
-  vikunja?: { baseUrl: string; tokenFile?: string };
+  /** `projectId` (with a token) lets the board create tasks in that project. */
+  /** `projectId` (default) and `projectMap` (initiative project -> Vikunja project), with a token, let the board create tasks. */
+  vikunja?: { baseUrl: string; tokenFile?: string; projectId?: number; projectMap?: Record<string, number> };
   /** `fj#n` means `repo` on `baseUrl`. Without `tokenFile`, refs only link (no API calls). */
   forgejo?: { baseUrl: string; repo: string; tokenFile?: string };
 };
@@ -77,6 +79,8 @@ const IssuesSchema = z
       .object({
         baseUrl: z.string().min(1),
         tokenFile: z.string().min(1).optional(),
+        projectId: z.number().int().positive().optional(),
+        projectMap: z.record(z.string().min(1).max(64), z.number().int().positive()).optional(),
       })
       .strict()
       .optional(),

@@ -1,4 +1,5 @@
-import type { IssueProvider, IssueRef, IssueState } from "./provider.js";
+import { createFailure, isRecord as isObject, positiveInteger, transportFailure } from "./create-common.js";
+import { IssueCreateError, type IssueProvider, type IssueRef, type IssueState } from "./provider.js";
 
 const REPO = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
 const NUMBER = /^[1-9]\d*$/;
@@ -122,6 +123,45 @@ export function createGithubIssueProvider(input: {
         }),
       );
       return map;
+    },
+    // The signed-in person's own write token, never the board's read token.
+    async createIssue(issue, credential, signal) {
+      const repo = REPO.exec(input.defaultRepo.trim());
+      if (!repo?.[1] || !repo[2]) throw new IssueCreateError("not_found", "no GitHub repository is configured");
+      const userToken = credential.token !== undefined && credential.token.length > 0 ? credential.token : undefined;
+      if (userToken === undefined) throw new IssueCreateError("auth", "connect GitHub write access first");
+      const tokens = [userToken, token];
+      const headers = githubHeaders(userToken);
+      headers.set("Content-Type", "application/json");
+      let response: Response;
+      try {
+        response = await fetchImpl(`https://api.github.com/repos/${repo[1]}/${repo[2]}/issues`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: issue.title,
+            body: issue.body,
+            ...(issue.labels !== undefined && issue.labels.length > 0 ? { labels: issue.labels } : {}),
+          }),
+          redirect: "error",
+          signal,
+        });
+      } catch (error) {
+        throw transportFailure("GitHub", error);
+      }
+      if (!response.ok) {
+        throw await createFailure("GitHub", response, tokens, "GitHub refused: the token cannot create issues in this repository");
+      }
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new IssueCreateError("upstream", "GitHub answered without an issue");
+      }
+      const number = isObject(body) ? positiveInteger(body.number) : undefined;
+      if (number === undefined || !isObject(body)) throw new IssueCreateError("upstream", "GitHub answered without an issue number");
+      const target = { owner: repo[1], name: repo[2], number: String(number) };
+      return { ref: `gh#${number}`, url: htmlUrl(body.html_url, userToken, issueUrl(target)) };
     },
   };
 }

@@ -106,7 +106,7 @@ One board can serve several repositories, listed in a repos file (`SNOBOARD_REPO
 
 ### Issue and external links
 
-- **Issue refs.** An initiative lists related issues as short refs: `gh#12`, `gh:owner/name#12`, `fj#12` / `fj:owner/name#12` (Forgejo or Gitea), or `vj:45` (Vikunja). Pasting a GitHub, Forgejo or Vikunja issue URL turns it into a short ref. Snoboard only reads the trackers.
+- **Issue refs.** An initiative lists related issues as short refs: `gh#12`, `gh:owner/name#12`, `fj#12` / `fj:owner/name#12` (Forgejo or Gitea), or `vj:45` (Vikunja). Pasting a GitHub, Forgejo or Vikunja issue URL turns it into a short ref. **New issue** creates an issue in one of the configured trackers and links it to the initiative; otherwise Snoboard only reads the trackers.
 - **External links.** `links` holds titled `https:` or `mailto:` links, such as design docs or dashboards.
 
 ## CLI

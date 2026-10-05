@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import type { IssueProvider, IssueRef, IssueState } from "./provider.js";
+import { createFailure, positiveInteger, snoboardFooter, transportFailure } from "./create-common.js";
+import { IssueCreateError, type CreatedIssue, type IssueProject, type IssueProvider, type IssueRef, type IssueState, type NewIssue } from "./provider.js";
 
 const TASK_ID = /^[1-9]\d*$/;
 
@@ -73,6 +74,10 @@ export function createVikunjaProvider(input: {
   baseUrl: string;
   /** Optional. Without a readable token the provider only builds links and never calls Vikunja. */
   tokenFile?: string;
+  /** Project that new tasks go to. Without it the provider cannot create tasks. */
+  projectId?: number;
+  /** Initiative project -> Vikunja project. Also enables creation without `projectId`. */
+  projectMap?: Record<string, number>;
   fetchImpl?: typeof fetch;
 }): IssueProvider {
   const fetchImpl = input.fetchImpl ?? fetch;
@@ -91,8 +96,79 @@ export function createVikunjaProvider(input: {
     return response.json() as Promise<unknown>;
   }
 
+  const projectId =
+    input.projectId !== undefined && Number.isInteger(input.projectId) && input.projectId > 0 ? input.projectId : undefined;
+
+  const mapped = Object.values(input.projectMap ?? {}).some((id) => Number.isInteger(id) && id > 0);
+  const canCreate = base !== undefined && token !== undefined && (projectId !== undefined || mapped);
+
+  async function listProjects(signal: AbortSignal): Promise<IssueProject[]> {
+    if (base === undefined || token === undefined) return [];
+    let response: Response;
+    try {
+      response = await fetchImpl(`${base}/api/v1/projects?per_page=200`, {
+        method: "GET",
+        headers: headers(token),
+        redirect: "error",
+        signal,
+      });
+    } catch (error) {
+      throw transportFailure("Vikunja", error);
+    }
+    if (!response.ok) throw await createFailure("Vikunja", response, [token], "Vikunja token cannot list projects");
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!Array.isArray(body)) return [];
+    const projects: IssueProject[] = [];
+    for (const item of body) {
+      if (projects.length >= 200) break;
+      if (!isRecord(item)) continue;
+      const id = positiveInteger(item.id);
+      if (id === undefined || item.is_archived === true) continue;
+      const title = typeof item.title === "string" ? withoutToken(item.title, token).slice(0, 200) : "";
+      projects.push({ id, title: title.length > 0 ? title : `Project ${id}` });
+    }
+    return projects;
+  }
+
+  async function createIssue(issue: NewIssue, _credential: unknown, signal: AbortSignal): Promise<CreatedIssue> {
+    const target = issue.projectId ?? projectId;
+    if (base === undefined || token === undefined || target === undefined) {
+      throw new IssueCreateError("not_found", "Vikunja task creation is not configured");
+    }
+    const requestHeaders = headers(token);
+    requestHeaders.set("Content-Type", "application/json");
+    let response: Response;
+    try {
+      response = await fetchImpl(`${base}/api/v1/projects/${target}/tasks`, {
+        method: "PUT",
+        headers: requestHeaders,
+        body: JSON.stringify({
+          title: issue.title,
+          description: snoboardFooter(issue.body, issue.createdBy, issue.initiativeId),
+        }),
+        redirect: "error",
+        signal,
+      });
+    } catch (error) {
+      throw transportFailure("Vikunja", error);
+    }
+    if (!response.ok) {
+      throw await createFailure("Vikunja", response, [token], "Vikunja token cannot create tasks in this project");
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new IssueCreateError("upstream", "Vikunja answered without a task");
+    }
+    const id = isRecord(body) ? positiveInteger(body.id) : undefined;
+    if (id === undefined) throw new IssueCreateError("upstream", "Vikunja answered without a task id");
+    return { ref: `vj:${id}`, url: taskUrl(base, String(id)) };
+  }
+
   return {
     id: "vikunja",
+    ...(canCreate ? { createIssue, listProjects } : {}),
     parseRef(ref) {
       return ref.provider === "vikunja" && TASK_ID.test(ref.key);
     },

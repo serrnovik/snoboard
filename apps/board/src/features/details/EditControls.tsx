@@ -15,6 +15,7 @@ import { useEditConfig } from "@/features/basket/edit-config";
 import { useBasket } from "@/features/basket/store";
 import { useImageAttachments } from "@/features/attachments/images";
 import { IssuesEditor, LinksEditor } from "@/features/details/ListEditors";
+import type { CreateProviderId } from "@/features/issues/NewIssueDialog";
 import { useRepoId } from "@/features/repo/context";
 import { repoApi } from "@/lib/routes";
 
@@ -30,7 +31,14 @@ export function EditControls({ item }: { item: BoardItem }) {
   const lists = useBoardLists(editing.enabled);
   if (!editing.ready || !editing.enabled || !isEditable(item) || lists === null) return null;
   return (
-    <EditForm item={item} statuses={lists.statuses} priorities={lists.priorities} issueLinks={editing.issues ?? {}} />
+    <EditForm
+      item={item}
+      statuses={lists.statuses}
+      priorities={lists.priorities}
+      issueLinks={editing.issues ?? {}}
+      createProviders={editing.createProviders ?? []}
+      csrf={editing.csrf}
+    />
   );
 }
 
@@ -39,11 +47,15 @@ function EditForm({
   statuses,
   priorities,
   issueLinks,
+  createProviders,
+  csrf,
 }: {
   item: BoardItem;
   statuses: readonly string[];
   priorities: readonly string[];
   issueLinks: IssueLinkConfig;
+  createProviders: readonly CreateProviderId[];
+  csrf: string | undefined;
 }) {
   const basket = useBasket(useRepoId());
   const formId = useId();
@@ -135,7 +147,12 @@ function EditForm({
           }}
         />
       </label>
-      <IssuesEditor id={item.id} issues={item.issues} linkConfig={issueLinks} />
+      <IssuesEditor
+        id={item.id}
+        issues={item.issues}
+        linkConfig={issueLinks}
+        create={{ providers: createProviders, csrf, title: titleValue, summary: item.summary }}
+      />
       <LinksEditor id={item.id} links={item.links} />
       {item.phases !== undefined && item.phases.length > 0 ? (
         <fieldset className="flex flex-col gap-2">

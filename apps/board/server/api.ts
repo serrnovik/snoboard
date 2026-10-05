@@ -27,6 +27,7 @@ import {
   lockSubmit,
   logSubmit,
   parseSubmitBody,
+  passwordIdentity,
   rateSubject,
   readBotTokenFile,
   submitEdits,
@@ -40,7 +41,23 @@ import { enrichPulls, githubTokenFromEnv } from "./forge/github.js";
 import { initiativeRepoDir, readCommittedBytes, readCommittedFile, requestRefresh } from "./repo-sync.js";
 import { defaultEditMode, editPermissions, type EditActor, type EditMode } from "./edit-env.js";
 import { getProposals } from "./proposals.js";
-import { boardIssueLinks, fetchInitiativeIssues, issueLinkConfig } from "./issues/setup.js";
+import {
+  boardIssueLinks,
+  fetchInitiativeIssues,
+  issueCreators,
+  issueLinkConfig,
+  vikunjaConfiguredProjects,
+  vikunjaProjectFor,
+  vikunjaProjects,
+} from "./issues/setup.js";
+import {
+  allowIssueCreate,
+  ISSUE_CREATE_MAX_BODY_BYTES,
+  ISSUE_CREATE_TIMEOUT_MS,
+  logIssueCreate,
+  parseIssueCreateBody,
+} from "./issues/create.js";
+import { IssueCreateError, type CreatedIssue } from "./issues/provider.js";
 import { botTokenFileFor, editSettingsFor, findActiveRepo, listActiveRepos } from "./repos-config.js";
 import { DEFAULT_REPO_ID, getConfig, getSnapshot, getStatus } from "./store.js";
 import { initiativeHistory, snapshotPeople } from "./history.js";
@@ -154,9 +171,19 @@ function editConfigJson(c: Context<BoardEnv>, repoId: string) {
       : {}),
     // Tracker links for pasted URLs and chips. Never includes tokens.
     issues: issueLinkConfig(repoId),
+    // Trackers this person may create issues in from the board. Ids only, never tokens or token paths.
+    createProviders: access.canSubmit && subject !== null ? createProvidersFor(repoId, actor, writeConnect) : [],
     // Echoed back by POST /api/edits/submit. Bound to this session or Access identity.
     ...(access.canSubmit && subject !== null ? { csrf: issueCsrfToken(subject) } : {}),
   });
+}
+
+/** GitHub writes with the person's own token, so it is offered only to people who can connect one. */
+function createProvidersFor(repoId: string, actor: EditActor, writeConnect: boolean): string[] {
+  const ownGithubToken = actor === "github" || (actor === "cloudflare-access" && writeConnect);
+  return issueCreators(repoId)
+    .map((provider) => provider.id)
+    .filter((id) => id !== "gh" || ownGithubToken);
 }
 
 /** Access board whose GitHub OAuth client may connect write tokens (SNOBOARD_GITHUB_WRITE_CONNECT). */
@@ -592,6 +619,145 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   }
   return c.json(outcome, submitStatus(outcome.code));
 }
+
+api.post("/repos/:repo/issues/create", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
+  return createIssueJson(c, repoId);
+});
+
+/** Who the footer of a board-token issue names. Never a token. */
+function creatorName(c: Context<BoardEnv>, actor: EditActor): string {
+  if (actor === "password") return passwordIdentity(process.env.SNOBOARD_PASSWORD_NAME);
+  return submitLogName(c);
+}
+
+async function createIssueJson(c: Context<BoardEnv>, repoId: string) {
+  const actor = editActor(c);
+  const who = submitLogName(c);
+  let provider: string | undefined;
+  let initiative: string | undefined;
+  const deny = (
+    status: 400 | 401 | 403 | 404 | 413 | 429 | 503,
+    payload: { code: string; error: string } & Record<string, unknown>,
+  ): Response => {
+    logIssueCreate({ outcome: "denied", reason: payload.code, user: who, actor, repo: repoId, provider, initiative });
+    return c.json({ ok: false, ...payload }, status);
+  };
+  const raw = await c.req.text();
+  if (Buffer.byteLength(raw, "utf8") > ISSUE_CREATE_MAX_BODY_BYTES) {
+    return deny(413, { code: "too_large", error: "payload too large" });
+  }
+  const settings = settingsFor(repoId);
+  if (!settings.enabled) return deny(403, { code: "editing_disabled", error: "editing is off" });
+  const subject = submitSubject(c);
+  const limitKey = rateSubject(c);
+  if (subject === null || limitKey === null) return deny(403, { code: "read_only", error: "sign in to create issues" });
+  const writeConnect = actor === "cloudflare-access" && githubWriteConnect();
+  const access = editPermissions(settings, actor, { githubWriteConnect: writeConnect });
+  if (!access.canSubmit) {
+    return deny(403, { code: "read_only", error: "this sign-in can view the board but not create issues" });
+  }
+  const body = parseIssueCreateBody(raw);
+  if ("error" in body) return deny(400, { code: "invalid", error: body.error });
+  provider = body.provider;
+  initiative = body.initiativeId;
+  if (!csrfMatches(subject, body.csrf)) return deny(403, { code: "csrf", error: "reload the board and try again" });
+  const allowed = createProvidersFor(repoId, actor, writeConnect);
+  const tracker = issueCreators(repoId).find((entry) => entry.id === body.provider);
+  if (tracker?.createIssue === undefined || !allowed.includes(body.provider)) {
+    return deny(400, { code: "provider_unavailable", error: "issue creation is not enabled for this tracker" });
+  }
+  const snapshot = getSnapshot(repoId);
+  if (snapshot === null) return deny(503, { code: "not_ready", error: "snapshot not ready" });
+  const item = snapshot.items.find((entry) => entry.id === body.initiativeId);
+  if (item === undefined) return deny(404, { code: "initiative_not_found", error: "initiative not found" });
+  let projectId: number | undefined;
+  if (body.provider === "vikunja") {
+    projectId = body.projectId ?? vikunjaProjectFor(repoId, item.project);
+    if (projectId === undefined) return deny(400, { code: "invalid", error: "choose a Vikunja project" });
+    const target = projectId;
+    // Only configured projects or ones the board's token lists; never an arbitrary id from the browser.
+    let known = vikunjaConfiguredProjects(repoId).includes(target);
+    if (!known) {
+      const listed = await vikunjaProjects(repoId, AbortSignal.timeout(ISSUE_CREATE_TIMEOUT_MS)).catch(() => []);
+      known = listed.some((project) => project.id === target);
+    }
+    if (!known) return deny(400, { code: "invalid", error: "unknown Vikunja project" });
+  }
+  let token: string | undefined;
+  if (body.provider === "gh") {
+    const credential = chooseSubmitCredential({
+      actor,
+      writeToken: getWriteToken(c),
+      // Issues are written as the person: the bot token is never used here.
+      botToken: undefined,
+      accessEmail: c.get("identity")?.email,
+      githubWriteConnect: writeConnect,
+    });
+    if (!credential.ok) {
+      if (credential.code === "needs_github_write") {
+        return deny(401, { code: credential.code, error: credential.error, needsGithubWrite: true });
+      }
+      return deny(403, { code: credential.code, error: credential.error });
+    }
+    token = credential.token;
+  }
+  if (!allowIssueCreate(limitKey, Date.now())) {
+    c.header("Retry-After", "3600");
+    return deny(429, { code: "rate_limited", error: "too many new issues; try again later" });
+  }
+  let created: CreatedIssue;
+  try {
+    created = await tracker.createIssue(
+      {
+        title: body.title,
+        body: body.body,
+        createdBy: creatorName(c, actor),
+        initiativeId: body.initiativeId,
+        ...(projectId === undefined ? {} : { projectId }),
+      },
+      token === undefined ? {} : { token },
+      AbortSignal.timeout(ISSUE_CREATE_TIMEOUT_MS),
+    );
+  } catch (error) {
+    const failure = error instanceof IssueCreateError ? error : new IssueCreateError("upstream", "the tracker failed");
+    logIssueCreate({ outcome: "failed", reason: failure.code, user: who, actor, repo: repoId, provider, initiative });
+    if (failure.code === "auth" && body.provider === "gh") {
+      clearWriteToken(c);
+      return c.json({ ok: false, code: "github_auth", error: "GitHub rejected your token; connect again", needsGithubWrite: true }, 401);
+    }
+    const status = failure.code === "scope" ? 403 : failure.code === "rejected" ? 400 : 502;
+    return c.json({ ok: false, code: failure.code, error: failure.message }, status);
+  }
+  logIssueCreate({ outcome: "ok", reason: "ok", user: who, actor, repo: repoId, provider, initiative, ref: created.ref });
+  return c.json({ ok: true, ref: created.ref, url: created.url }, 201);
+}
+
+api.get("/repos/:repo/issues/vikunja-projects", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
+  const actor = editActor(c);
+  const writeConnect = actor === "cloudflare-access" && githubWriteConnect();
+  const access = editPermissions(settingsFor(repoId), actor, { githubWriteConnect: writeConnect });
+  if (!access.canSubmit || submitSubject(c) === null || !createProvidersFor(repoId, actor, writeConnect).includes("vikunja")) {
+    return c.json({ error: "not available" }, 403);
+  }
+  const initiativeId = c.req.query("initiative");
+  const item = initiativeId === undefined ? undefined : getSnapshot(repoId)?.items.find((entry) => entry.id === initiativeId);
+  const selected = vikunjaProjectFor(repoId, item?.project);
+  let projects: { id: number; title: string }[];
+  try {
+    projects = await vikunjaProjects(repoId, AbortSignal.timeout(ISSUE_CREATE_TIMEOUT_MS));
+  } catch {
+    projects = [];
+  }
+  // Configured projects stay selectable when the list is unavailable.
+  for (const id of vikunjaConfiguredProjects(repoId)) {
+    if (!projects.some((project) => project.id === id)) projects = [...projects, { id, title: `Project ${id}` }];
+  }
+  return c.json({ projects: projects.map(({ id, title }) => ({ id, title })), ...(selected === undefined ? {} : { selected }) });
+});
 
 function cloneUrlFor(repoId: string): string | undefined {
   const configured = findActiveRepo(repoId);

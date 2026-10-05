@@ -30,7 +30,7 @@ untrusted. Assets: the viewer's session on the board, and the viewer's privacy (
 
 ### Write path (`SNOBOARD_EDIT_MODES` set)
 
-Assets: the target repository, the GitHub write tokens (each GitHub user's own token, and the optional bot token),
+Assets: the target repository, the issue trackers, the GitHub write tokens (each GitHub user's own token, and the optional bot token),
 and the audit trail in commit trailers. See `docs/editing.md` for operator settings.
 
 | Threat | Control |
@@ -50,6 +50,7 @@ and the audit trail in commit trailers. See `docs/editing.md` for operator setti
 | Serving images | `GET /api/repos/<repo>/initiatives/<id>/assets/<file>` uses the same sign-in as the board API (an `.png` ending never makes an API path public). The file name must match the same pattern, so `..`, `/` and encoded variants never reach git; the blob is read at the snapshot commit with `git cat-file` (trees and oversize blobs refused). It is answered only when its magic bytes are PNG, JPEG, WebP or GIF, with that `Content-Type`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Cross-Origin-Resource-Policy: same-origin`; everything else is `404`. |
 | Image rendering | Markdown previews never render raw HTML. `<img>` is allowed only for relative `assets/...` paths, rewritten to the endpoint above or, before submit, to a local object URL. Remote, `data:` and other image URLs are dropped, so viewing an initiative cannot leak the viewer to a third-party host. External `links` must be `https:` or `mailto:` and open with `rel="noopener noreferrer"`. |
 | Untrusted edit branches | Proposals are read from `snoboard/edits-*` branches, which anyone with push access can create. Values are shown as text only (React escapes them), PR links must be `https:`. Edit branches are hidden from the normal snapshot so they never replace a card. |
+| Creating issues (`POST /api/repos/<repo>/issues/create`) | Same origin and CSRF checks as submit; only people who may submit; 20 per person per hour; body at most 96 KiB, title 1 to 256 characters on one line, text at most 20 000 characters; the initiative must exist. GitHub uses only the person's own write token (never the read or bot token; a `401` drops it). Forgejo and Vikunja use their configured token files (a Vikunja project must be configured or listed by the token; the project list endpoint returns only ids and titles to people who may create) and sign the text with `Created from Snoboard by <person> for <initiative>`. Requests go only to `api.github.com` or the configured `baseUrl` (no host or URL comes from the browser), redirects are refused, tracker messages are scrubbed of the token and transport errors are replaced by a fixed text. `edit-config` lists only provider ids. One info log line per attempt with outcome, reason, user, provider, initiative and ref, never the title, text or a token. |
 | Repudiation | Every commit ends with `Snoboard-Edit: <summary>` lines and `Snoboard-Edit-By: <user>` (`<user> (via bot)` for the bot, `<github login> (<access email>)` for an Access user's own token). Each submit is logged at info with outcome, reason code, user, edit count and image count and bytes, never content, file names or tokens. |
 
 Known limits: image bytes wait in the browser's IndexedDB until submit, readable by anything running on the board's

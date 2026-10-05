@@ -7,6 +7,7 @@ import { bootEditConfig } from "./edit-env.js";
 import { MAX_SUBMIT_BODY_BYTES } from "snoboard";
 import { MAX_VALIDATE_BODY_BYTES } from "./edits/prepare.js";
 import { githubRouter } from "./auth/github.js";
+import { ISSUE_CREATE_MAX_BODY_BYTES } from "./issues/create.js";
 import { authMiddleware, type BoardEnv } from "./auth/middleware.js";
 import { passwordRouter } from "./auth/password.js";
 import { startRepoSyncIfConfigured } from "./repo-sync.js";
@@ -25,6 +26,7 @@ bootEditConfig(process.env);
 export const MAX_BODY_BYTES = 8 * 1024;
 const EDIT_VALIDATE_PATH = /^\/api\/(?:repos\/[a-z0-9-]{1,32}\/)?edits\/validate$/;
 const EDIT_SUBMIT_PATH = /^\/api\/(?:repos\/[a-z0-9-]{1,32}\/)?edits\/submit$/;
+const ISSUE_CREATE_PATH = /^\/api\/repos\/[a-z0-9-]{1,32}\/issues\/create$/;
 
 const smallBody = bodyLimit({
   maxSize: MAX_BODY_BYTES,
@@ -33,6 +35,11 @@ const smallBody = bodyLimit({
 const validateBody = bodyLimit({
   maxSize: MAX_VALIDATE_BODY_BYTES,
   onError: (c) => c.json({ error: "payload too large" }, 413),
+});
+// A new issue carries up to 20 000 characters of markdown.
+const issueBody = bodyLimit({
+  maxSize: ISSUE_CREATE_MAX_BODY_BYTES,
+  onError: (c) => c.json({ ok: false, code: "too_large", error: "payload too large" }, 413),
 });
 const submitBody = bodyLimit({
   maxSize: MAX_SUBMIT_BODY_BYTES,
@@ -46,6 +53,7 @@ app.use((c, next) => {
   const pathname = new URL(c.req.url).pathname;
   if (EDIT_SUBMIT_PATH.test(pathname)) return submitBody(c, next);
   if (EDIT_VALIDATE_PATH.test(pathname)) return validateBody(c, next);
+  if (ISSUE_CREATE_PATH.test(pathname)) return issueBody(c, next);
   return smallBody(c, next);
 });
 app.use(authMiddleware);

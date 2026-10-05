@@ -160,6 +160,7 @@ describe("GET /api/edit-config", () => {
       needsGithubWrite: false,
       defaultMode: "pr",
       issues: {},
+      createProviders: [],
     });
   });
 
@@ -183,6 +184,7 @@ describe("GET /api/edit-config", () => {
       needsGithubWrite: false,
       defaultMode: "direct",
       issues: {},
+      createProviders: [],
     });
 
     const github = await app.request("/api/edit-config", authed("github", "octocat"));
@@ -210,6 +212,7 @@ describe("GET /api/edit-config", () => {
       needsGithubWrite: false,
       defaultMode: "pr",
       issues: {},
+      createProviders: [],
       csrf: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     });
     expect(JSON.stringify(body)).not.toContain("super-secret-token");
