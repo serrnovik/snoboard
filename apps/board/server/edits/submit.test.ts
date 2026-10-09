@@ -11,6 +11,7 @@ import { SESSION_COOKIE, signSession, type SessionClaims } from "../auth/session
 import { resetWriteTokens, storeWriteToken, WRITE_COOKIE, writeTokenCount } from "../auth/write-tokens.js";
 import { resetEditConfig, setEditConfig, type EditSettings } from "../edit-env.js";
 import { app } from "../index.js";
+import { BranchNotFoundError, setBranchSource } from "../branches.js";
 import { setInitiativeRepoDir } from "../repo-sync.js";
 import { resetStore, seedStore } from "../store.js";
 import {
@@ -120,6 +121,7 @@ describe("POST /api/edits/submit", () => {
     resetWriteTokens();
     resetSubmitState();
     setInitiativeRepoDir(undefined);
+    setBranchSource("default", undefined);
     delete process.env.SNOBOARD_EDIT_BOT_TOKEN_FILE;
     delete process.env.SNOBOARD_PASSWORD_NAME;
   });
@@ -212,6 +214,89 @@ describe("POST /api/edits/submit", () => {
     expect(github.commit(body.commit).message).toBe(
       "snoboard: 1 edit by octocat\n\nSnoboard-Edit: acme-001: status idea -> planned\nSnoboard-Edit-By: octocat\n",
     );
+  });
+
+  describe("selected branch", () => {
+    const forgotten: string[] = [];
+
+    beforeEach(() => {
+      forgotten.length = 0;
+      github.refs.set("feat/x", github.initialHead);
+      github.refs.set("release", github.initialHead);
+      setBranchSource("default", {
+        list: async () => ({ defaultBranch: "main", branches: [], truncated: false }),
+        snapshot: async (name) => {
+          if (!github.refs.has(name)) throw new BranchNotFoundError();
+          return { name, sha: github.initialHead, snapshot };
+        },
+        forget: (name) => void forgotten.push(name),
+      });
+    });
+
+    it("direct: pushes to the selected branch when edit.directBranches allows it", async () => {
+      useEdits({ modes: ["pr", "direct"], directBranch: "main", directBranches: ["main", "feat/*"] });
+      const user = await signIn();
+      const response = await submit(user, { edits: [statusEdit()], mode: "direct", branch: "feat/x" });
+      expect(response.status).toBe(200);
+      const body = await json(response);
+      expect(body).toMatchObject({ ok: true, mode: "direct", branch: "feat/x" });
+      expect(github.refs.get("feat/x")).toBe(body.commit);
+      expect(github.refs.get("main")).toBe(github.initialHead);
+      expect(github.patches).toEqual([{ branch: "feat/x", sha: body.commit, force: false, applied: true }]);
+      expect(forgotten).toEqual(["feat/x"]);
+    });
+
+    it("direct: refuses a branch outside edit.directBranches and writes nothing", async () => {
+      useEdits({ modes: ["pr", "direct"], directBranch: "main", directBranches: ["feat/*"] });
+      const user = await signIn();
+      const response = await submit(user, { edits: [statusEdit()], mode: "direct", branch: "release" });
+      expect(response.status).toBe(403);
+      expect(await json(response)).toMatchObject({ ok: false, code: "branch_not_allowed" });
+      expect(github.patches).toEqual([]);
+      expect(github.refs.get("release")).toBe(github.initialHead);
+    });
+
+    it("direct: without edit.directBranches only directBranch is allowed, not the default branch", async () => {
+      useEdits({ modes: ["pr", "direct"], directBranch: "live" });
+      github.refs.set("live", github.initialHead);
+      const user = await signIn();
+      const refused = await submit(user, { edits: [statusEdit()], mode: "direct", branch: "main" });
+      expect(refused.status).toBe(403);
+      const allowed = await submit(user, { edits: [statusEdit()], mode: "direct", branch: "live" });
+      expect(allowed.status).toBe(200);
+      expect(github.refs.get("main")).toBe(github.initialHead);
+    });
+
+    it("pr: opens the pull request from a new edits branch into the selected branch", async () => {
+      useEdits({ modes: ["pr"] });
+      const user = await signIn();
+      const response = await submit(user, { edits: [statusEdit()], mode: "pr", branch: "feat/x" });
+      expect(response.status).toBe(200);
+      const body = await json(response);
+      expect(body.branch).toMatch(/^snoboard\/edits-/);
+      expect(github.pulls).toEqual([expect.objectContaining({ head: body.branch, base: "feat/x" })]);
+      expect(github.refs.get("feat/x")).toBe(github.initialHead);
+    });
+
+    it("refuses an invalid branch name before anything runs", async () => {
+      useEdits({ modes: ["pr", "direct"], directBranch: "main", directBranches: ["*"] });
+      const user = await signIn();
+      for (const branch of ["-x", "a..b", "refs/heads/main", "a b", "x".repeat(300)]) {
+        const response = await submit(user, { edits: [statusEdit()], mode: "direct", branch });
+        expect(response.status).toBe(400);
+        expect(await json(response)).toMatchObject({ code: "invalid" });
+      }
+      expect(github.calls).toEqual([]);
+    });
+
+    it("refuses a branch the remote does not have", async () => {
+      useEdits({ modes: ["pr", "direct"], directBranch: "main", directBranches: ["*"] });
+      const user = await signIn();
+      const response = await submit(user, { edits: [statusEdit()], mode: "pr", branch: "gone" });
+      expect(response.status).toBe(409);
+      expect(await json(response)).toMatchObject({ code: "branch_not_found" });
+      expect(github.pulls).toEqual([]);
+    });
   });
 
   it("direct: retries once when the branch moved, re-applying on the new head", async () => {
@@ -729,7 +814,7 @@ async function csrfFor(user: User): Promise<string> {
 
 async function submit(
   user: User,
-  payload: { edits: unknown[]; mode: string; attachments?: Record<string, string> },
+  payload: { edits: unknown[]; mode: string; attachments?: Record<string, string>; branch?: string },
   csrf?: string | null,
 ): Promise<Response> {
   const token = csrf === undefined ? await csrfFor(user) : csrf;

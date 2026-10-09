@@ -17,6 +17,9 @@ import {
   takeResumeIntent,
 } from "@/features/basket/SubmitDialog";
 import { resetBasketStore, useBasket } from "@/features/basket/store";
+import { BoardRefProvider } from "@/features/repo/branch-context";
+import { setActiveRef } from "@/lib/routes";
+import type { ReactNode } from "react";
 
 const EDIT = { kind: "setStatus" as const, id: "acme-001", from: "idea", to: "planned" };
 
@@ -26,6 +29,7 @@ afterEach(() => {
   cleanup();
   submitNavigation.assign = realAssign;
   window.history.replaceState(null, "", "/");
+  setActiveRef("default", null);
   sessionStorage.clear();
   localStorage.clear();
   resetBasketStore();
@@ -394,6 +398,76 @@ describe("submit dialog", () => {
       "Created acme-003 at initiatives/acme/003-gamma/initiative.md",
     );
     expect(basket.result.current.list()).toEqual([]);
+  });
+});
+
+describe("submit dialog on a selected branch", () => {
+  function setup(config: Record<string, unknown>) {
+    window.history.replaceState(null, "", "/r/default/?ref=feat%2Fx");
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <BoardRefProvider repoId="default">{children}</BoardRefProvider>
+    );
+    const basket = renderHook(() => useBasket(), { wrapper });
+    act(() => {
+      basket.result.current.add(EDIT);
+    });
+    const calls: { url: string; body?: Record<string, unknown> }[] = [];
+    installFetch(async (url, init) => {
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      calls.push({ url, body });
+      if (url.includes("/edit-config")) {
+        return json({
+          enabled: true,
+          canSubmit: true,
+          needsGithubWrite: false,
+          modes: ["direct", "pr"],
+          defaultMode: "direct",
+          csrf: "csrf-token",
+          baseBranch: "main",
+          directBranch: "main",
+          branch: "feat/x",
+          ...config,
+        });
+      }
+      if (url.includes("/edits/validate")) return json({ results: [{ index: 0, ok: true }] });
+      if (url.endsWith("/edits/submit")) return json({ ok: true, mode: "direct", commit: "abc1234fff", branch: "feat/x" });
+      return json({ error: "not found" }, 404);
+    });
+    render(
+      <BoardRefProvider repoId="default">
+        <SubmitDialog />
+      </BoardRefProvider>,
+    );
+    return { calls, basket };
+  }
+
+  it("names the branch, pushes to it, and sends it in the body", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup({ directAllowed: true });
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("submit-branch").textContent).toBe("Branch: feat/x");
+    expect(await within(dialog).findByRole("radio", { name: "Push to feat/x" })).toBeTruthy();
+    expect(within(dialog).getByRole("radio", { name: "Open a pull request into feat/x" })).toBeTruthy();
+    expect(calls.find((call) => call.url.includes("/edit-config"))?.url).toBe(
+      "/api/repos/default/edit-config?ref=feat%2Fx",
+    );
+    await within(dialog).findByTestId("validate-result");
+    await user.click(within(dialog).getByRole("button", { name: "Submit edits" }));
+    await within(dialog).findByText(/Pushed/);
+    const submit = calls.find((call) => call.url.endsWith("/edits/submit"));
+    expect(submit?.url).toBe("/api/repos/default/edits/submit");
+    expect(submit?.body).toMatchObject({ mode: "direct", branch: "feat/x" });
+  });
+
+  it("offers only a pull request into the branch when direct is not allowed there", async () => {
+    const user = userEvent.setup();
+    setup({ directAllowed: false });
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    const dialog = await screen.findByRole("dialog");
+    const pr = (await within(dialog).findByRole("radio", { name: "Open a pull request into feat/x" })) as HTMLInputElement;
+    expect(pr.checked).toBe(true);
+    expect(within(dialog).queryByRole("radio", { name: "Push to feat/x" })).toBeNull();
   });
 });
 

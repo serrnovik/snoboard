@@ -18,6 +18,11 @@ import type { InitiativeFrontmatter } from "./schema.js";
 export interface SnapshotOptions extends GitCallOptions {
   /** Remote whose `refs/remotes/<name>/*` tips are read. The caller updates remotes. */
   remote?: string;
+  /**
+   * Read exactly these refs instead of listing `refs/remotes/<remote>/*`. A single-branch view passes one
+   * ref marked `isDefault`, so the board shows that branch alone (no merge across branches).
+   */
+  refs?: readonly RefInfo[];
 }
 
 export type BoardItem = InitiativeFrontmatter & {
@@ -134,7 +139,7 @@ export async function buildSnapshot(
   config: Config,
   options?: SnapshotOptions,
 ): Promise<Snapshot> {
-  const refs = await listRefs(repoDir, {
+  const refs = options?.refs !== undefined ? options.refs.map((ref) => ({ ...ref })) : await listRefs(repoDir, {
     remote: options?.remote,
     defaultBranch: config.defaultBranch,
     branchPatterns: config.branchPatterns,

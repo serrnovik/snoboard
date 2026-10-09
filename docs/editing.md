@@ -7,6 +7,7 @@ Snoboard can save small changes from the board: status, priority, phase status, 
 | `SNOBOARD_EDIT_MODES` | Comma-separated `direct` and `pr`. `direct` pushes to a branch. `pr` opens a pull request |
 | `SNOBOARD_EDIT_BASE_BRANCH` | Branch pull requests target. Defaults to the repository's default branch |
 | `SNOBOARD_EDIT_DIRECT_BRANCH` | Branch `direct` updates. Required when `direct` is enabled. This is usually `main` |
+| `SNOBOARD_EDIT_DIRECT_BRANCHES` | Comma-separated branch globs `direct` may push to when the board shows one branch (`main, feat/*`, or `*`). Default: only `SNOBOARD_EDIT_DIRECT_BRANCH` |
 | `SNOBOARD_EDIT_BOT_TOKEN_FILE` | Optional token file so password and Cloudflare Access users can submit |
 | `SNOBOARD_GITHUB_WRITE_TOKEN_TTL` / `_STORE` | How long a connected write token lives (default `1h`, max `12h`) and whether it survives restarts (see [auth.md](auth.md#write-token-lifetime-and-storage)) |
 | `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE` | `true` asks for write access at GitHub sign-in: one consent, no separate connect |
@@ -14,6 +15,33 @@ Snoboard can save small changes from the board: status, priority, phase status, 
 | `SNOBOARD_PASSWORD_NAME` | Optional label in bot commit trailers. Defaults to `password-user` |
 
 `direct` is the default when it is allowed. The board remembers the last choice for each repository in the browser.
+
+## Editing a branch
+
+The branch chip in the header shows what the board reads: **All branches (merged)** (the default), or one branch.
+Click it (or focus it and press Enter) to open the picker: type to filter, arrow keys and Home/End to move, Enter to
+pick, Escape to close. Each branch shows its short sha, last commit date and age; the newest is first. The choice is
+remembered per repository in the browser and written to the URL as `?ref=<branch>`, so a link opens the same branch
+(the URL wins over the remembered choice).
+
+On a branch the board is the snapshot of that ref alone: no other branch is merged in. Edits made there go to that
+branch:
+
+- **Push to `<branch>`** commits on top of the branch head and fast-forwards it with the expected old sha (never a
+  force push). It is offered only when `edit.directBranches` (or `SNOBOARD_EDIT_DIRECT_BRANCHES`) matches the branch.
+  Without that setting only `directBranch` may be pushed to; the default branch and protected branches get no
+  exception, list them to allow them. The server refuses anything else with `403 branch_not_allowed`.
+- **Open a pull request into `<branch>`** creates a `snoboard/edits-*` branch from the commit and opens the pull
+  request with the selected branch as its base.
+
+Each branch has its own basket (`snoboard:basket:v1:<repo>:<branch>`); the merged view shares the default branch's
+basket. Switching with pending edits asks "You have N pending edits on `<branch>`. Switch anyway? They stay saved for
+`<branch>`."; **Cancel** stays. A basket saved before this change (`snoboard:basket:v1:<repo>`) moves to the default
+branch's basket the first time the board loads.
+
+`GET /api/repos/<repo>/branches?q=<text>` answers `{ defaultBranch, branches: [{ name, sha, date }], truncated }`
+(short sha, ISO commit date, newest first, at most 500, `q` filters by substring). It needs the same sign-in as
+`/api/board`. Read routes take `?ref=<branch>`; submit takes `branch` in the JSON body.
 
 ## Issues and links
 
@@ -116,11 +144,11 @@ and the remembered submit mode are kept per repository in the browser. See
 Every edit in the basket is checked again on the server against the head of the target branch. If any edit no
 longer applies, nothing is written.
 
-- `direct`: one commit on top of the branch head, then a fast-forward of `SNOBOARD_EDIT_DIRECT_BRANCH` with the
-  expected old sha. Never a force push. If someone pushed in between, Snoboard re-applies once on the new head. If
+- `direct`: one commit on top of the branch head, then a fast-forward of `SNOBOARD_EDIT_DIRECT_BRANCH` (or of the
+  selected branch, see [Editing a branch](#editing-a-branch)) with the expected old sha. Never a force push. If someone pushed in between, Snoboard re-applies once on the new head. If
   branch protection refuses the push, the dialog says so and offers `pr`.
 - `pr`: one commit on a new `snoboard/edits-<time>-<random>` branch, then a pull request to
-  `SNOBOARD_EDIT_BASE_BRANCH` (default branch when unset). If the pull request cannot be opened, the branch is
+  `SNOBOARD_EDIT_BASE_BRANCH` (default branch when unset), or to the selected branch. If the pull request cannot be opened, the branch is
   deleted. The `snoboard` label is added when it exists.
 
 Open edit branches show as **proposed** on their cards until they are merged or deleted.

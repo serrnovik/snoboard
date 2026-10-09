@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Switch the board to one branch. A branch chip in the header opens a searchable picker (type to filter, arrow keys,
+  Enter, Escape; matches highlighted) listing the remote branches newest commit first, with short sha, date and age.
+  **All branches (merged)** stays the default; the default branch is an explicit choice. A branch view is the snapshot
+  of that ref alone, fetched on demand (`--filter=blob:none`, only the initiative blobs it shows) into
+  `refs/snoboard/heads/*` and cached per ref (LRU, 8 per repository). `?ref=<branch>` in the URL is shareable and wins
+  over the branch remembered per repository. New endpoint `GET /api/repos/<repo>/branches?q=` (same sign-in as the
+  board) and `?ref=` on the board, initiative, body, history, asset, report, icon, validate and edit-config routes.
+  New per-repo `branchListPatterns` (default `["*"]`, newest 500 listed; `SNOBOARD_BRANCH_LIST_PATTERNS`).
+- Edits follow the selected branch: **Push to `<branch>`** fast-forwards that branch (expected old sha, never forced)
+  and **Open a pull request into `<branch>`** opens the PR from a new `snoboard/edits-*` branch into it. Direct pushes
+  need the new per-repo `edit.directBranches` (globs; default only `edit.directBranch`; `SNOBOARD_EDIT_DIRECT_BRANCHES`);
+  any other branch is refused with `403 branch_not_allowed`. Branch names from the browser are validated
+  (`git check-ref-format` rules, no leading `-`, at most 200 characters) and must exist on the remote.
+- One basket per branch: `snoboard:basket:v1:<repo>:<branch>`. The old `snoboard:basket:v1:<repo>` basket moves to the
+  default branch's basket on first load. Switching branch with pending edits asks first; the edits stay saved for the
+  branch they were made on. The Submit dialog names the branch.
+
 - Icons: `.snoboard.yml` `projects: { <project>: { icon, name } }` and `labels: { <label>: { icon, color } }`, plus an
   optional `icon` frontmatter field on an initiative (one or two emoji, or a repo-relative `.png` / `.svg` / `.webp` /
   `.ico` up to 256 KB). Cards, the details header, graph nodes, the Project filter and the New initiative picker show

@@ -5,10 +5,13 @@ import {
   blockedChain,
   bodyHash,
   detectImageType,
+  isValidBranchName,
   MAX_ATTACHMENT_BYTES,
   MAX_SUBMIT_BODY_BYTES,
   type Config,
+  type Snapshot,
 } from "snoboard";
+import { branchSource, BranchNotFoundError, filterBranches } from "./branches.js";
 import { getAuthConfig } from "./auth/env.js";
 import { authMiddleware, type BoardEnv } from "./auth/middleware.js";
 import {
@@ -39,7 +42,7 @@ import {
 import { clearWriteToken, getWriteToken } from "./auth/write-tokens.js";
 import { enrichPulls, githubTokenFromEnv } from "./forge/github.js";
 import { initiativeRepoDir, readCommittedBytes, readCommittedFile, requestRefresh } from "./repo-sync.js";
-import { defaultEditMode, editPermissions, type EditActor, type EditMode } from "./edit-env.js";
+import { defaultEditMode, editPermissions, mayPushDirect, type EditActor, type EditMode } from "./edit-env.js";
 import { getProposals } from "./proposals.js";
 import {
   boardIssueLinks,
@@ -146,6 +149,8 @@ api.get("/edit-config", (c) => editConfigJson(c, firstRepoId()));
 
 function editConfigJson(c: Context<BoardEnv>, repoId: string) {
   const settings = settingsFor(repoId);
+  const rawRef = c.req.query("ref");
+  const ref = rawRef !== undefined && isValidBranchName(rawRef) ? rawRef : undefined;
   const board = getConfig(repoId);
   const baseBranch = settings.baseBranch ?? board?.defaultBranch ?? "main";
   const actor = editActor(c);
@@ -158,6 +163,9 @@ function editConfigJson(c: Context<BoardEnv>, repoId: string) {
     modes: settings.modes,
     baseBranch,
     ...(settings.directBranch === undefined ? {} : { directBranch: settings.directBranch }),
+    defaultBranch: board?.defaultBranch ?? "main",
+    // With `?ref=`: the selected branch, and whether `direct` may push to it (edit.directBranches).
+    ...(ref === undefined ? {} : { branch: ref, directAllowed: mayPushDirect(settings, ref) }),
     canSubmit: access.canSubmit,
     // A GitHub user who already granted write access must see Submit, not Connect again.
     needsGithubWrite: access.needsGithubWrite && connected === null,
@@ -221,11 +229,73 @@ function notReadyJson(c: Context<BoardEnv>, repoId: string) {
   return c.json({ error: `repository sync failed: ${status.lastError}`, code: "sync_failed", status }, 503);
 }
 
+type BoardView =
+  | { ok: true; snapshot: Snapshot | null; ref?: string; cacheId: string }
+  | { ok: false; status: 400 | 404 | 502 | 503; code: string; error: string };
+
+/**
+ * The snapshot a request reads: the merged view, or with `?ref=<branch>` that branch alone.
+ * The name is untrusted: it must be a valid branch name and exist on the remote.
+ */
+async function resolveView(
+  c: Context<BoardEnv>,
+  repoId: string,
+  raw: string | undefined = c.req.query("ref"),
+): Promise<BoardView> {
+  if (raw === undefined || raw.length === 0) return { ok: true, snapshot: getSnapshot(repoId), cacheId: repoId };
+  if (!isValidBranchName(raw)) return { ok: false, status: 400, code: "invalid_branch", error: "invalid branch name" };
+  const source = branchSource(repoId);
+  if (source === undefined || getConfig(repoId) === null) {
+    return { ok: false, status: 503, code: "not_ready", error: "snapshot not ready" };
+  }
+  try {
+    const view = await source.snapshot(raw);
+    return { ok: true, snapshot: view.snapshot, ref: raw, cacheId: `${repoId}@${raw}` };
+  } catch (error) {
+    if (error instanceof BranchNotFoundError) {
+      return { ok: false, status: 404, code: "branch_not_found", error: "branch not found" };
+    }
+    if (error instanceof Error && error.message === "snapshot not ready") {
+      return { ok: false, status: 503, code: "not_ready", error: "snapshot not ready" };
+    }
+    console.error(`snoboard: branch view failed repo="${repoId}"`);
+    return { ok: false, status: 502, code: "branch_failed", error: "could not load that branch" };
+  }
+}
+
+function viewError(c: Context<BoardEnv>, view: Extract<BoardView, { ok: false }>): Response {
+  return c.json({ error: view.error, code: view.code }, view.status);
+}
+
+api.get("/repos/:repo/branches", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
+  const query = c.req.query("q") ?? "";
+  if (query.length > 200) return c.json({ error: "query too long" }, 400);
+  const source = branchSource(repoId);
+  if (source === undefined || getConfig(repoId) === null) return notReadyJson(c, repoId);
+  try {
+    const list = await source.list();
+    const branches = filterBranches(list.branches, query).map((branch) => ({
+      name: branch.name,
+      sha: branch.sha.slice(0, 7),
+      date: branch.date,
+    }));
+    return c.json({ defaultBranch: list.defaultBranch, branches, truncated: list.truncated });
+  } catch (error) {
+    if (error instanceof Error && error.message === "snapshot not ready") return notReadyJson(c, repoId);
+    console.error(`snoboard: branch list failed repo="${repoId}"`);
+    return c.json({ error: "could not list branches", code: "branch_failed" }, 502);
+  }
+});
+
 async function boardJson(c: Context<BoardEnv>, repoId: string) {
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
   const config = getConfig(repoId);
   if (snapshot === null || config === null) return notReadyJson(c, repoId);
-  const people = await snapshotPeople(repoId, initiativeRepoDir(repoId), snapshot, config);
+  const people = await snapshotPeople(view.cacheId, initiativeRepoDir(repoId), snapshot, config);
   return c.json({
     people,
     status: getStatus(repoId),
@@ -243,6 +313,7 @@ async function boardJson(c: Context<BoardEnv>, repoId: string) {
     legacy: snapshot.legacy,
     errors: snapshot.errors,
     refs: snapshot.refs,
+    ...(view.ref === undefined ? {} : { ref: view.ref }),
     proposals: getProposals(repoId),
   });
 }
@@ -256,7 +327,9 @@ api.get("/repos/:repo/initiatives/:id/body", async (c) => {
 api.get("/initiatives/:id/body", (c) => initiativeBodyJson(c, firstRepoId()));
 
 async function initiativeBodyJson(c: Context<BoardEnv>, repoId: string) {
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
   if (snapshot === null) return notReadyJson(c, repoId);
   const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
   if (item === undefined) return c.json({ error: "not found" }, 404);
@@ -295,7 +368,8 @@ function assetNotFound(c: Context<BoardEnv>): Response {
 async function initiativeAssetResponse(c: Context<BoardEnv>, repoId: string): Promise<Response> {
   const file = c.req.param("file") ?? "";
   if (!ASSET_FILE.test(file)) return assetNotFound(c);
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  const snapshot = view.ok ? view.snapshot : null;
   if (snapshot === null) return assetNotFound(c);
   const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
   if (item === undefined) return assetNotFound(c);
@@ -334,7 +408,8 @@ api.get("/repos/:repo/initiatives/:id/reports/:dir/:file", (c) =>
  */
 async function initiativeReportResponse(c: Context<BoardEnv>, repoId: string, relative: string): Promise<Response> {
   if (!isKnownRepo(repoId)) return reportNotFound();
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  const snapshot = view.ok ? view.snapshot : null;
   if (snapshot === null) return reportNotFound();
   const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
   if (item === undefined) return reportNotFound();
@@ -352,7 +427,8 @@ async function initiativeReportResponse(c: Context<BoardEnv>, repoId: string, re
 api.get("/repos/:repo/icons/:path", async (c) => {
   const repoId = c.req.param("repo");
   if (!isKnownRepo(repoId)) return iconNotFound();
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  const snapshot = view.ok ? view.snapshot : null;
   const config = getConfig(repoId);
   if (snapshot === null || config === null) return iconNotFound();
   const found = lookupIcon(snapshot, config, c.req.param("path"));
@@ -372,7 +448,9 @@ api.get("/initiatives/:id/history", (c) => initiativeHistoryJson(c, firstRepoId(
 
 /** Default-branch commits touching the initiative folder: metadata only, paged by `skip`. */
 async function initiativeHistoryJson(c: Context<BoardEnv>, repoId: string) {
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
   if (snapshot === null) return notReadyJson(c, repoId);
   const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
   if (item === undefined) return c.json({ error: "not found" }, 404);
@@ -381,7 +459,7 @@ async function initiativeHistoryJson(c: Context<BoardEnv>, repoId: string) {
   const rawSkip = c.req.query("skip") ?? "0";
   if (!/^\d{1,4}$/.test(rawSkip)) return c.json({ error: "invalid skip" }, 400);
   try {
-    const history = await initiativeHistory(repoId, repoDir, snapshot, item.path, Number(rawSkip));
+    const history = await initiativeHistory(view.cacheId, repoDir, snapshot, item.path, Number(rawSkip));
     return c.json(history);
   } catch {
     return c.json({ error: "history unavailable" }, 500);
@@ -397,7 +475,9 @@ api.get("/repos/:repo/initiatives/:id", async (c) => {
 api.get("/initiatives/:id", (c) => initiativeJson(c, firstRepoId()));
 
 async function initiativeJson(c: Context<BoardEnv>, repoId: string) {
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
   if (snapshot === null) return notReadyJson(c, repoId);
   const id = c.req.param("id");
   const idMissing = id === undefined || id.length === 0;
@@ -413,7 +493,7 @@ async function initiativeJson(c: Context<BoardEnv>, repoId: string) {
     loadPulls(config, pullNumbers),
     fetchInitiativeIssues(repoId, item.issues),
   ]);
-  const people = config === null ? {} : await snapshotPeople(repoId, initiativeRepoDir(repoId), snapshot, config);
+  const people = config === null ? {} : await snapshotPeople(view.cacheId, initiativeRepoDir(repoId), snapshot, config);
   return c.json({
     ...item,
     ...(people[id] === undefined ? {} : { people: people[id] }),
@@ -502,7 +582,9 @@ async function validateJson(c: Context<BoardEnv>, repoId: string) {
   if (parsed === "invalid") return c.json({ error: "invalid edits" }, 400);
   if (parsed === "too-many") return c.json({ error: "too many edits" }, 400);
 
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
   const config = getConfig(repoId);
   if (snapshot === null || config === null) {
     return c.json({ error: "snapshot not ready" }, 503);
@@ -567,6 +649,10 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   if (!isAllowedMode(body.mode, settings.modes)) {
     return deny(400, { code: "mode_not_allowed", error: "this submit mode is not enabled" }, extra);
   }
+  // A selected branch: `direct` pushes to it only when edit.directBranches allows it; `pr` targets it.
+  if (body.branch !== undefined && body.mode === "direct" && !mayPushDirect(settings, body.branch)) {
+    return deny(403, { code: "branch_not_allowed", error: `direct pushes to ${body.branch} are not allowed` }, extra);
+  }
   const credential = chooseSubmitCredential({
     actor,
     writeToken: actor === "github" || writeConnect ? getWriteToken(c) : null,
@@ -586,7 +672,12 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   }
   const github = credential.githubLogin;
   const logged = github === undefined ? extra : { ...extra, github };
-  const snapshot = getSnapshot(repoId);
+  const view = await resolveView(c, repoId, body.branch);
+  if (!view.ok) {
+    const status = view.status === 404 || view.status === 400 ? 409 : 503;
+    return deny(status, { code: view.code, error: view.error }, extra);
+  }
+  const snapshot = view.snapshot;
   const config = getConfig(repoId);
   if (snapshot === null || config === null) {
     return deny(503, { code: "not_ready", error: "snapshot not ready" }, extra);
@@ -613,6 +704,7 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
       settings,
       snapshot,
       config,
+      ...(body.branch === undefined ? {} : { branch: body.branch }),
       localReader: readerFor(initiativeRepoDir(repoId), config),
       token: credential.token,
       user: credential.user,
@@ -624,6 +716,7 @@ async function submitJson(c: Context<BoardEnv>, repoId: string) {
   }
   if (outcome.ok) {
     logSubmit({ outcome: "ok", reason: "ok", user: who, actor, repo: repoId, ...logged });
+    if (body.branch !== undefined) branchSource(repoId)?.forget(body.branch);
     void requestRefresh(repoId);
     const commitUrl = githubCommitUrl(config.forge.repo, outcome.commit);
     return c.json(commitUrl === undefined ? outcome : { ...outcome, commitUrl }, 200);
@@ -804,8 +897,10 @@ function isAllowedMode(mode: string, allowed: readonly EditMode[]): mode is Edit
   return (allowed as readonly string[]).includes(mode);
 }
 
-function submitStatus(code: Exclude<SubmitOutcome, { ok: true }>["code"]): 400 | 409 | 502 {
+function submitStatus(code: Exclude<SubmitOutcome, { ok: true }>["code"]): 400 | 403 | 409 | 502 {
   switch (code) {
+    case "branch_not_allowed":
+      return 403;
     case "path_not_allowed":
       return 400;
     case "rejected":

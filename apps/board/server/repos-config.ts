@@ -6,6 +6,7 @@ import {
   editSettingsForRepo,
   getEditConfig,
   loadEditConfig,
+  parseBranchPatterns,
   type EditMode,
   type EditSettings,
 } from "./edit-env.js";
@@ -23,13 +24,17 @@ const SINGLE_REPO_ENV = [
   "SNOBOARD_EDIT_MODES",
   "SNOBOARD_EDIT_BASE_BRANCH",
   "SNOBOARD_EDIT_DIRECT_BRANCH",
+  "SNOBOARD_EDIT_DIRECT_BRANCHES",
   "SNOBOARD_EDIT_BOT_TOKEN_FILE",
+  "SNOBOARD_BRANCH_LIST_PATTERNS",
 ] as const;
 
 export type RepoEditConfig = {
   modes: EditMode[];
   baseBranch?: string;
   directBranch?: string;
+  /** Branches `direct` may push to from a single-branch view. Default: only `directBranch`. */
+  directBranches?: string[];
   botTokenFile?: string;
   /** OAuth write scope for GitHub users; `public_repo` for public repos. Default: SNOBOARD_GITHUB_WRITE_SCOPE. */
   githubWriteScope?: "repo" | "public_repo";
@@ -53,6 +58,8 @@ export type RepoConfig = {
   sshKeyFile?: string;
   gitTokenFile?: string;
   configPath?: string;
+  /** Remote branches offered in the branch picker (glob). Default `["*"]`; the newest 500 are listed. */
+  branchListPatterns?: string[];
   edit: RepoEditConfig;
   issues?: RepoIssuesConfig;
 };
@@ -62,6 +69,7 @@ const EditSchema = z
     modes: z.array(z.enum(["pr", "direct"])).optional(),
     baseBranch: z.string().min(1).optional(),
     directBranch: z.string().min(1).optional(),
+    directBranches: z.array(z.string().min(1)).max(100).optional(),
     botTokenFile: z.string().min(1).optional(),
     githubWriteScope: z.enum(["repo", "public_repo"]).optional(),
   })
@@ -103,6 +111,7 @@ const RepoSchema = z
     sshKeyFile: z.string().min(1).optional(),
     gitTokenFile: z.string().min(1).optional(),
     configPath: z.string().min(1).optional(),
+    branchListPatterns: z.array(z.string().min(1)).min(1).max(100).optional(),
     edit: EditSchema.optional(),
     issues: IssuesSchema.optional(),
   })
@@ -178,6 +187,7 @@ function editFromEnv(env: NodeJS.ProcessEnv): RepoEditConfig {
     modes: [...settings.modes],
     ...(settings.baseBranch === undefined ? {} : { baseBranch: settings.baseBranch }),
     ...(directBranch === undefined ? {} : { directBranch }),
+    ...(settings.directBranches === undefined ? {} : { directBranches: [...settings.directBranches] }),
     ...(botTokenFile === undefined ? {} : { botTokenFile }),
   };
 }
@@ -191,6 +201,9 @@ function editFromYaml(edit: z.infer<typeof EditSchema> | undefined): RepoEditCon
       SNOBOARD_EDIT_DIRECT_BRANCH: edit.directBranch,
       SNOBOARD_EDIT_BOT_TOKEN_FILE: edit.botTokenFile,
     });
+    if (edit.directBranches !== undefined && parsed.modes.includes("direct")) {
+      parsed.directBranches = parseBranchPatterns(edit.directBranches, "edit.directBranches") ?? [];
+    }
     return edit.githubWriteScope === undefined ? parsed : { ...parsed, githubWriteScope: edit.githubWriteScope };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -207,11 +220,24 @@ function repoFromEnv(env: NodeJS.ProcessEnv): RepoConfig {
     ...(board.sshKeyFile === undefined ? {} : { sshKeyFile: board.sshKeyFile }),
     ...(board.gitTokenFile === undefined ? {} : { gitTokenFile: board.gitTokenFile }),
     ...(board.configPath === undefined ? {} : { configPath: board.configPath }),
+    ...branchListFrom(env.SNOBOARD_BRANCH_LIST_PATTERNS),
     edit: editFromEnv(env),
   };
   assertCredentials(repo);
   return repo;
 }
+
+function branchListFrom(raw: string | readonly string[] | undefined): { branchListPatterns?: string[] } {
+  try {
+    const patterns = parseBranchPatterns(raw, "branchListPatterns");
+    return patterns === undefined || patterns.length === 0 ? {} : { branchListPatterns: patterns };
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Default branch-picker patterns: every remote branch. */
+export const DEFAULT_BRANCH_LIST_PATTERNS: readonly string[] = ["*"];
 
 function warnIfSingleRepoEnv(env: NodeJS.ProcessEnv): void {
   const set = SINGLE_REPO_ENV.filter((name) => blank(env[name]) !== undefined);
@@ -265,6 +291,7 @@ function reposFromFile(file: string): RepoConfig[] {
       ...(entry.sshKeyFile === undefined ? {} : { sshKeyFile: entry.sshKeyFile }),
       ...(entry.gitTokenFile === undefined ? {} : { gitTokenFile: entry.gitTokenFile }),
       ...(entry.configPath === undefined ? {} : { configPath: entry.configPath }),
+      ...branchListFrom(entry.branchListPatterns),
       edit: editFromYaml(entry.edit),
       ...(issues === undefined ? {} : { issues }),
     };
@@ -291,10 +318,12 @@ function cloneRepo(repo: RepoConfig): RepoConfig {
     ...(repo.sshKeyFile === undefined ? {} : { sshKeyFile: repo.sshKeyFile }),
     ...(repo.gitTokenFile === undefined ? {} : { gitTokenFile: repo.gitTokenFile }),
     ...(repo.configPath === undefined ? {} : { configPath: repo.configPath }),
+    ...(repo.branchListPatterns === undefined ? {} : { branchListPatterns: [...repo.branchListPatterns] }),
     edit: {
       modes: [...repo.edit.modes],
       ...(repo.edit.baseBranch === undefined ? {} : { baseBranch: repo.edit.baseBranch }),
       ...(repo.edit.directBranch === undefined ? {} : { directBranch: repo.edit.directBranch }),
+      ...(repo.edit.directBranches === undefined ? {} : { directBranches: [...repo.edit.directBranches] }),
       ...(repo.edit.botTokenFile === undefined ? {} : { botTokenFile: repo.edit.botTokenFile }),
       ...(repo.edit.githubWriteScope === undefined ? {} : { githubWriteScope: repo.edit.githubWriteScope }),
     },
@@ -330,6 +359,13 @@ export function editSettingsFor(repoId: string): EditSettings {
     return repo === undefined ? disabledEditSettings() : editSettingsForRepo(repo.edit);
   }
   return repoId === "default" ? getEditConfig() : disabledEditSettings();
+}
+
+/** Branch-picker patterns for one repository (`["*"]` unless configured). */
+export function branchListPatternsFor(repoId: string, env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  if (activeRepos !== null) return findActiveRepo(repoId)?.branchListPatterns ?? DEFAULT_BRANCH_LIST_PATTERNS;
+  if (repoId !== "default") return DEFAULT_BRANCH_LIST_PATTERNS;
+  return branchListFrom(env.SNOBOARD_BRANCH_LIST_PATTERNS).branchListPatterns ?? DEFAULT_BRANCH_LIST_PATTERNS;
 }
 
 /**

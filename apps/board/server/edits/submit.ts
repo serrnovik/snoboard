@@ -5,6 +5,7 @@ import {
   ASSET_FILE,
   detectImageType,
   EditSchema,
+  isValidBranchName,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_ATTACHMENTS,
@@ -16,7 +17,7 @@ import {
 import type { BoardEnv } from "../auth/middleware.js";
 import { safeEqual } from "../auth/session.js";
 import { sessionKeyOf } from "../auth/write-tokens.js";
-import type { EditActor, EditMode, EditSettings } from "../edit-env.js";
+import { mayPushDirect, type EditActor, type EditMode, type EditSettings } from "../edit-env.js";
 import {
   addLabelBestEffort,
   type CommitFile,
@@ -144,6 +145,8 @@ export type SubmitBody = {
   csrf: unknown;
   /** Optional echo of the target repo id; the path decides, a mismatch is rejected. */
   repo?: string;
+  /** Branch the board shows. `direct` pushes to it; `pr` opens the pull request into it. Validated, untrusted. */
+  branch?: string;
   /** Image bytes keyed by their sha256 (hex), decoded from base64. */
   attachments: Map<string, Buffer>;
 };
@@ -189,6 +192,7 @@ export function parseSubmitBody(raw: string): SubmitBody | { error: string } {
   if (record.edits.length > MAX_VALIDATE_EDITS) return { error: "too many edits" };
   if (typeof record.mode !== "string") return { error: "invalid mode" };
   if (record.repo !== undefined && typeof record.repo !== "string") return { error: "invalid repo" };
+  if (record.branch !== undefined && !isValidBranchName(record.branch)) return { error: "invalid branch" };
   const attachments = parseAttachments(record.attachments);
   if ("error" in attachments) return attachments;
   return {
@@ -197,6 +201,7 @@ export function parseSubmitBody(raw: string): SubmitBody | { error: string } {
     csrf: record.csrf,
     attachments,
     ...(typeof record.repo === "string" ? { repo: record.repo } : {}),
+    ...(typeof record.branch === "string" ? { branch: record.branch } : {}),
   };
 }
 
@@ -206,6 +211,8 @@ export type SubmitInput = {
   settings: EditSettings;
   snapshot: Snapshot;
   config: Config;
+  /** Selected branch: the `direct` target (must match edit.directBranches) and the `pr` base. */
+  branch?: string;
   /** Reads the snapshot's blob from the local clone; used to tell unchanged files from re-applied ones. */
   localReader: ReadBlob;
   token: string;
@@ -236,6 +243,7 @@ export type SubmitFailureCode =
   | "path_not_allowed"
   | "number_taken"
   | "branch_moved"
+  | "branch_not_allowed"
   | "direct_rejected"
   | "pr_failed"
   | "github_auth"
@@ -271,10 +279,13 @@ class SubmitStop extends Error {
 export async function submitEdits(input: SubmitInput): Promise<SubmitOutcome> {
   const { config, settings, mode, token, options } = input;
   const repo = config.forge.repo;
+  if (input.branch !== undefined && !isValidBranchName(input.branch)) return fail("rejected", "invalid branch name");
+  if (input.branch !== undefined && mode === "direct" && !mayPushDirect(settings, input.branch)) {
+    return fail("branch_not_allowed", `direct pushes to ${input.branch} are not allowed`);
+  }
   const target =
-    mode === "direct"
-      ? (settings.directBranch ?? "")
-      : (settings.baseBranch ?? config.defaultBranch);
+    input.branch ??
+    (mode === "direct" ? (settings.directBranch ?? "") : (settings.baseBranch ?? config.defaultBranch));
   if (target.length === 0) return fail("github_error", "the target branch is not configured");
   const edits = parseEdits(input.edits);
   if ("results" in edits) {

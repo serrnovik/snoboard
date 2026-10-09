@@ -9,12 +9,19 @@ import {
   type GitCallOptions,
   type Snapshot,
 } from "snoboard";
+import { createGitBranchSource, setBranchSource } from "./branches.js";
 import { EDIT_BRANCH_PREFIX } from "./edits/submit.js";
 import { loadSyncSettings, type BoardEnv } from "./env.js";
 import { githubTokenFromEnv } from "./forge/github.js";
 import { loadProposals, setProposals } from "./proposals.js";
-import { editSettingsFor, loadReposConfig, setActiveRepos, type RepoConfig } from "./repos-config.js";
-import { commitSnapshot, DEFAULT_REPO_ID, recordSyncError, registerRepo, setRefreshing } from "./store.js";
+import {
+  branchListPatternsFor,
+  editSettingsFor,
+  loadReposConfig,
+  setActiveRepos,
+  type RepoConfig,
+} from "./repos-config.js";
+import { commitSnapshot, DEFAULT_REPO_ID, getConfig, recordSyncError, registerRepo, setRefreshing } from "./store.js";
 
 export type Logger = {
   info(message: string): void;
@@ -209,6 +216,7 @@ class RepoSync implements RepoSyncController {
   private started = false;
   private waiters: Array<() => void> = [];
   private timer: ReturnType<typeof setInterval> | undefined;
+  private lock: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly env: BoardEnv,
@@ -219,6 +227,36 @@ class RepoSync implements RepoSyncController {
     this.helperPath = path.join(env.dataDir, "git-credential-helper.mjs");
     this.hooksDir = path.join(env.dataDir, "hooks");
     this.logger = options?.logger ?? defaultLogger;
+    const repoId = this.repoId;
+    setBranchSource(
+      repoId,
+      createGitBranchSource({
+        repoDir: this.repoDir,
+        git: (args, call) => this.gitWithEnv(args, call?.env),
+        withLock: (task) => this.withLock(task),
+        config: () => getConfig(repoId),
+        patterns: () => branchListPatternsFor(repoId),
+        ttlMs: env.refreshSeconds * 1000,
+        env: this.coreGitEnv(),
+      }),
+    );
+  }
+
+  /** One git writer at a time in this clone: the periodic sync and on-demand branch fetches. */
+  withLock<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.lock.then(task, task);
+    this.lock = run.catch(() => undefined);
+    return run;
+  }
+
+  private async gitWithEnv(args: readonly string[], extra: NodeJS.ProcessEnv | undefined): Promise<string> {
+    const result = await spawnGit(this.repoDir, args, { ...this.gitEnv(), ...extra });
+    if (result.code !== 0) {
+      const secrets = await this.readSecrets().catch(() => []);
+      const detail = redactSecrets(result.stderr.trim(), secrets);
+      throw new Error(`git ${args[0] ?? ""} failed (${result.code})${detail ? `: ${detail}` : ""}`);
+    }
+    return result.stdout;
   }
 
   start(): void {
@@ -258,7 +296,7 @@ class RepoSync implements RepoSyncController {
     try {
       while (this.pending && !this.stopped) {
         this.pending = false;
-        await this.tick();
+        await this.withLock(() => this.tick());
       }
     } finally {
       this.running = false;

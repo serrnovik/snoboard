@@ -9,9 +9,11 @@ import { resetAuthConfig, setAuthConfig, type CloudflareAccessConfig } from "./a
 import { SESSION_COOKIE, signSession } from "./auth/session.js";
 import {
   bootEditConfig,
+  directBranchPatterns,
   editPermissions,
   getEditConfig,
   loadEditConfig,
+  mayPushDirect,
   resetEditConfig,
   setEditConfig,
   type EditActor,
@@ -132,6 +134,46 @@ describe("edit environment", () => {
   });
 });
 
+describe("directBranches", () => {
+  it("defaults to directBranch only; the default branch is not implied", () => {
+    const settings = loadEditConfig({ SNOBOARD_EDIT_MODES: "pr,direct", SNOBOARD_EDIT_DIRECT_BRANCH: "live" });
+    expect(directBranchPatterns(settings)).toEqual(["live"]);
+    expect(mayPushDirect(settings, "live")).toBe(true);
+    expect(mayPushDirect(settings, "main")).toBe(false);
+  });
+
+  it("parses comma-separated globs and matches across slashes", () => {
+    const settings = loadEditConfig({
+      SNOBOARD_EDIT_MODES: "direct",
+      SNOBOARD_EDIT_DIRECT_BRANCH: "main",
+      SNOBOARD_EDIT_DIRECT_BRANCHES: "main, feat/*, initiative/*",
+    });
+    expect(settings.directBranches).toEqual(["main", "feat/*", "initiative/*"]);
+    expect(mayPushDirect(settings, "feat/a/b")).toBe(true);
+    expect(mayPushDirect(settings, "initiative/x")).toBe(true);
+    expect(mayPushDirect(settings, "fix/y")).toBe(false);
+    expect(mayPushDirect(settings, "feat")).toBe(false);
+  });
+
+  it("allows nothing when direct is off, even with patterns", () => {
+    const settings = loadEditConfig({ SNOBOARD_EDIT_MODES: "pr", SNOBOARD_EDIT_DIRECT_BRANCHES: "*" });
+    expect(directBranchPatterns(settings)).toEqual([]);
+    expect(mayPushDirect(settings, "main")).toBe(false);
+  });
+
+  it("refuses invalid patterns", () => {
+    for (const bad of ["-x", "a..b", "a b", "feat/*.lock", "refs/heads/*"]) {
+      expect(() =>
+        loadEditConfig({
+          SNOBOARD_EDIT_MODES: "direct",
+          SNOBOARD_EDIT_DIRECT_BRANCH: "main",
+          SNOBOARD_EDIT_DIRECT_BRANCHES: bad,
+        }),
+      ).toThrow(/invalid branch pattern/);
+    }
+  });
+});
+
 describe("GET /api/edit-config", () => {
   afterEach(() => {
     resetAuthConfig();
@@ -156,12 +198,32 @@ describe("GET /api/edit-config", () => {
       enabled: false,
       modes: [],
       baseBranch: "main",
+      defaultBranch: "main",
       canSubmit: false,
       needsGithubWrite: false,
       defaultMode: "pr",
       issues: {},
       createProviders: [],
     });
+  });
+
+  it("with ?ref= names the branch and whether direct may push to it", async () => {
+    usePasswordAuth();
+    setEditConfig(
+      loadEditConfig({
+        SNOBOARD_EDIT_MODES: "pr,direct",
+        SNOBOARD_EDIT_DIRECT_BRANCH: "main",
+        SNOBOARD_EDIT_DIRECT_BRANCHES: "main,feat/*",
+      }),
+    );
+    const allowed = await app.request("/api/edit-config?ref=feat%2Fx", authed("password", "reader"));
+    expect(await allowed.json()).toMatchObject({ branch: "feat/x", directAllowed: true });
+    const refused = await app.request("/api/edit-config?ref=release", authed("password", "reader"));
+    expect(await refused.json()).toMatchObject({ branch: "release", directAllowed: false });
+    const invalid = await app.request("/api/edit-config?ref=-bad", authed("password", "reader"));
+    const body = (await invalid.json()) as Record<string, unknown>;
+    expect(body.branch).toBeUndefined();
+    expect(body.directAllowed).toBeUndefined();
   });
 
   it("requires authentication", async () => {
@@ -180,6 +242,7 @@ describe("GET /api/edit-config", () => {
       modes: ["pr", "direct"],
       baseBranch: "develop",
       directBranch: "live",
+      defaultBranch: "develop",
       canSubmit: false,
       needsGithubWrite: false,
       defaultMode: "direct",
@@ -208,6 +271,7 @@ describe("GET /api/edit-config", () => {
       enabled: true,
       modes: ["pr"],
       baseBranch: "release",
+      defaultBranch: "develop",
       canSubmit: true,
       needsGithubWrite: false,
       defaultMode: "pr",

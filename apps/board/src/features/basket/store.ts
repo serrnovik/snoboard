@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { EditSchema, type Edit } from "snoboard/browser";
 import { deleteImage } from "@/features/attachments/store";
+import { useBasketBranch } from "@/features/repo/branch-context";
 
 /** Single-repo boards use this id until a board lists more than one repository. */
 export const DEFAULT_REPO_ID = "default";
@@ -10,8 +11,29 @@ const EMPTY: Edit[] = [];
 const cache = new Map<string, Edit[]>();
 const listeners = new Set<() => void>();
 
-export function basketStorageKey(repoId: string): string {
+/** Branch a basket belongs to when nothing else is known. */
+export const DEFAULT_BASKET_BRANCH = "main";
+
+/** One basket per repository and branch: `snoboard:basket:v1:<repoId>:<branch>`. */
+export function basketStorageKey(repoId: string, branch: string = DEFAULT_BASKET_BRANCH): string {
+  return `snoboard:basket:v1:${repoId}:${branch}`;
+}
+
+/** The key used before baskets were kept per branch. Read once and moved to the default branch's basket. */
+export function legacyBasketStorageKey(repoId: string): string {
   return `snoboard:basket:v1:${repoId}`;
+}
+
+type Scope = { repoId: string; branch: string; key: string; migrate: boolean };
+
+function scopeOf(repoId: string, branch: string, isDefault: boolean): Scope {
+  return { repoId, branch, key: basketStorageKey(repoId, branch), migrate: isDefault };
+}
+
+/** Pending edits saved for another branch, without subscribing to them. */
+export function savedBasketCount(repoId: string, branch: string, isDefault = false): number {
+  if (typeof window === "undefined") return 0;
+  return current(scopeOf(repoId, branch, isDefault)).length;
 }
 
 export function resetBasketStore(): void {
@@ -34,16 +56,19 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
     snapshotStatus: (id: string) => string | undefined,
   ) => void;
 } {
-  const [edits, setEdits] = useState<readonly Edit[]>(() => readClient(repoId));
+  const { branch, isDefault } = useBasketBranch();
+  const key = basketStorageKey(repoId, branch);
+  const [edits, setEdits] = useState<readonly Edit[]>(() => readClient(scopeOf(repoId, branch, isDefault)));
 
   useEffect(() => {
-    cache.set(repoId, readBasket(repoId));
-    setEdits(cache.get(repoId) ?? EMPTY);
-    const listener = () => setEdits(cache.get(repoId) ?? EMPTY);
+    const scope = scopeOf(repoId, branch, isDefault);
+    cache.set(scope.key, readBasket(scope));
+    setEdits(cache.get(scope.key) ?? EMPTY);
+    const listener = () => setEdits(cache.get(scope.key) ?? EMPTY);
     listeners.add(listener);
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== null && event.key !== basketStorageKey(repoId)) return;
-      cache.set(repoId, readBasket(repoId));
+      if (event.key !== null && event.key !== scope.key) return;
+      cache.set(scope.key, readBasket(scope));
       listener();
     };
     window.addEventListener("storage", onStorage);
@@ -51,61 +76,62 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
       listeners.delete(listener);
       window.removeEventListener("storage", onStorage);
     };
-  }, [repoId]);
+  }, [repoId, branch, isDefault]);
 
   const publish = useCallback(
     (next: readonly Edit[]) => {
-      const current = cache.get(repoId) ?? EMPTY;
+      const current = cache.get(key) ?? EMPTY;
       if (sameEdits(current, next)) return;
       const stored = next.length === 0 ? EMPTY : [...next];
-      cache.set(repoId, stored);
-      writeBasket(repoId, stored);
+      cache.set(key, stored);
+      writeBasket(key, stored);
       for (const listener of listeners) listener();
     },
-    [repoId],
+    [key],
   );
+  const read = useCallback(() => readClient(scopeOf(repoId, branch, isDefault)), [repoId, branch, isDefault]);
 
   const add = useCallback(
     (edit: Edit) => {
       const parsed = EditSchema.safeParse(edit);
       if (!parsed.success) return;
-      publish(mergeInto(cache.get(repoId) ?? readClient(repoId), parsed.data));
+      publish(mergeInto(read(), parsed.data));
     },
-    [publish, repoId],
+    [publish, read],
   );
 
   const remove = useCallback(
     (index: number) => {
-      const current = cache.get(repoId) ?? readClient(repoId);
+      const current = read();
       if (index < 0 || index >= current.length) return;
       forgetImages([current[index]!]);
       publish(current.filter((_, entryIndex) => entryIndex !== index));
     },
-    [publish, repoId],
+    [publish, read],
   );
 
   const clear = useCallback(() => {
-    forgetImages(cache.get(repoId) ?? readClient(repoId));
+    forgetImages(read());
     publish(EMPTY);
-  }, [publish, repoId]);
+  }, [publish, read]);
 
-  const list = useCallback(() => cache.get(repoId) ?? readClient(repoId), [repoId]);
+  const list = read;
 
   const retain = useCallback(
     (indices: readonly number[]) => {
-      const current = cache.get(repoId) ?? readClient(repoId);
+      const current = read();
       const keep = new Set(indices);
       forgetImages(current.filter((_, index) => !keep.has(index)));
       publish(current.filter((_, index) => keep.has(index)));
     },
-    [publish, repoId],
+    [publish, read],
   );
 
   const insertBefore = useCallback(
     (index: number, added: readonly Edit[]) => {
-      publish(insertEditsBefore(cache.get(repoId) ?? readClient(repoId), index, added));
+      publish(insertEditsBefore(read(), index, added));
     },
-    [publish, repoId],
+    [publish, read],
   );
 
   const moveStatuses = useCallback(
@@ -113,9 +139,9 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
       columns: Readonly<Record<string, readonly { id: string }[]>>,
       snapshotStatus: (id: string) => string | undefined,
     ) => {
-      publish(applyStatusColumns(cache.get(repoId) ?? readClient(repoId), columns, snapshotStatus));
+      publish(applyStatusColumns(read(), columns, snapshotStatus));
     },
-    [publish, repoId],
+    [publish, read],
   );
 
   return { edits, add, remove, clear, list, retain, insertBefore, moveStatuses };
@@ -174,33 +200,44 @@ export function describeEdit(edit: Edit, titles?: ReadonlyMap<string, string>): 
   return `${edit.id} · ${title} — ${formatPending(edit)}`;
 }
 
-function readClient(repoId: string): readonly Edit[] {
+function readClient(scope: Scope): readonly Edit[] {
   if (typeof window === "undefined") return EMPTY;
-  return current(repoId);
+  return current(scope);
 }
 
-function current(repoId: string): readonly Edit[] {
-  const found = cache.get(repoId);
+function current(scope: Scope): readonly Edit[] {
+  const found = cache.get(scope.key);
   if (found !== undefined) return found;
-  const loaded = readBasket(repoId);
-  cache.set(repoId, loaded);
+  const loaded = readBasket(scope);
+  cache.set(scope.key, loaded);
   return loaded;
 }
 
-function readBasket(repoId: string): Edit[] {
+/** A basket saved before baskets were per branch belongs to the default branch: move it there once. */
+function migrateLegacy(scope: Scope): void {
+  if (!scope.migrate) return;
+  const legacy = legacyBasketStorageKey(scope.repoId);
+  const raw = localStorage.getItem(legacy);
+  if (raw === null) return;
+  if (localStorage.getItem(scope.key) === null) localStorage.setItem(scope.key, raw);
+  localStorage.removeItem(legacy);
+}
+
+function readBasket(scope: Scope): Edit[] {
   if (typeof localStorage === "undefined") return [];
-  const key = basketStorageKey(repoId);
+  migrateLegacy(scope);
+  const key = scope.key;
   const raw = localStorage.getItem(key);
   if (raw === null) return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    writeBasket(repoId, EMPTY);
+    writeBasket(key, EMPTY);
     return [];
   }
   if (!Array.isArray(parsed)) {
-    writeBasket(repoId, EMPTY);
+    writeBasket(key, EMPTY);
     return [];
   }
   const edits: Edit[] = [];
@@ -208,13 +245,13 @@ function readBasket(repoId: string): Edit[] {
     const result = EditSchema.safeParse(entry);
     if (result.success) edits.push(result.data);
   }
-  if (edits.length !== parsed.length) writeBasket(repoId, edits);
+  if (edits.length !== parsed.length) writeBasket(key, edits);
   return edits;
 }
 
-function writeBasket(repoId: string, edits: readonly Edit[]): void {
+function writeBasket(key: string, edits: readonly Edit[]): void {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(basketStorageKey(repoId), JSON.stringify(edits));
+  localStorage.setItem(key, JSON.stringify(edits));
 }
 
 function sameEdits(left: readonly Edit[], right: readonly Edit[]): boolean {

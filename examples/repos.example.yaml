@@ -17,6 +17,10 @@ repos:
   - id: demo
     name: Public demo
     url: "https://github.com/example/demo.git"
+    # Branches offered in the header branch picker (default: every branch).
+    branchListPatterns: ["*"]
     edit:
       modes: [direct]
       directBranch: main
+      # Branches a direct push may target when the board shows one branch (default: only directBranch).
+      directBranches: [main, "feat/*"]

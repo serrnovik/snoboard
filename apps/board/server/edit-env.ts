@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { isValidBranchName, matchesBranchPatterns } from "snoboard";
 
 export type EditMode = "pr" | "direct";
 
@@ -9,6 +10,11 @@ export type EditSettings = {
   modes: readonly EditMode[];
   baseBranch?: string;
   directBranch?: string;
+  /**
+   * Branches `direct` may push to when the board shows one branch (glob, `*` crosses `/`).
+   * Defaults to `[directBranch]`. Empty when `direct` is off.
+   */
+  directBranches?: readonly string[];
   botTokenConfigured: boolean;
 };
 
@@ -26,11 +32,31 @@ export function disabledEditSettings(): EditSettings {
 }
 
 export function getEditConfig(): EditSettings {
-  return { ...active, modes: [...active.modes] };
+  return copySettings(active);
 }
 
 export function setEditConfig(settings: EditSettings): void {
-  active = { ...settings, modes: [...settings.modes] };
+  active = copySettings(settings);
+}
+
+function copySettings(settings: EditSettings): EditSettings {
+  return {
+    ...settings,
+    modes: [...settings.modes],
+    ...(settings.directBranches === undefined ? {} : { directBranches: [...settings.directBranches] }),
+  };
+}
+
+/** Patterns `direct` may push to: `directBranches`, else just `directBranch`. None without `direct`. */
+export function directBranchPatterns(settings: EditSettings): readonly string[] {
+  if (!settings.modes.includes("direct")) return [];
+  if (settings.directBranches !== undefined) return settings.directBranches;
+  return settings.directBranch === undefined ? [] : [settings.directBranch];
+}
+
+/** True when `direct` may push to `branch`. The default and protected branches are not special: list them to allow them. */
+export function mayPushDirect(settings: EditSettings, branch: string): boolean {
+  return matchesBranchPatterns(branch, directBranchPatterns(settings));
 }
 
 export function resetEditConfig(): void {
@@ -50,15 +76,18 @@ export function editSettingsForRepo(edit: {
   modes: readonly EditMode[];
   baseBranch?: string;
   directBranch?: string;
+  directBranches?: readonly string[];
   botTokenFile?: string;
 }): EditSettings {
   const modes = [...edit.modes];
   const directBranch = modes.includes("direct") ? edit.directBranch : undefined;
+  const directBranches = modes.includes("direct") ? edit.directBranches : undefined;
   return {
     enabled: modes.length > 0,
     modes,
     ...(edit.baseBranch === undefined ? {} : { baseBranch: edit.baseBranch }),
     ...(directBranch === undefined ? {} : { directBranch }),
+    ...(directBranches === undefined ? {} : { directBranches: [...directBranches] }),
     botTokenConfigured: botTokenExists(edit.botTokenFile),
   };
 }
@@ -70,11 +99,13 @@ export function loadEditConfig(env: NodeJS.ProcessEnv): EditSettings {
     invalid("SNOBOARD_EDIT_DIRECT_BRANCH is required when direct is enabled");
   }
   const baseBranch = optionalBranch(env.SNOBOARD_EDIT_BASE_BRANCH, "SNOBOARD_EDIT_BASE_BRANCH");
+  const directBranches = parseBranchPatterns(env.SNOBOARD_EDIT_DIRECT_BRANCHES, "SNOBOARD_EDIT_DIRECT_BRANCHES");
   return {
     enabled: modes.length > 0,
     modes,
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(modes.includes("direct") && directBranch !== undefined ? { directBranch } : {}),
+    ...(modes.includes("direct") && directBranches !== undefined ? { directBranches } : {}),
     botTokenConfigured: botTokenExists(blank(env.SNOBOARD_EDIT_BOT_TOKEN_FILE)),
   };
 }
@@ -142,6 +173,30 @@ function parseBranch(value: string, name: string): string {
     invalid(`${name} is not a valid branch name`);
   }
   return value;
+}
+
+/**
+ * Comma-separated branch globs (`main, feat/*`, or `*`). Each must be a valid branch
+ * name once `*` and `?` are taken out; unset or blank means "only directBranch".
+ */
+export function parseBranchPatterns(raw: string | readonly string[] | undefined, name: string): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const parts = typeof raw === "string" ? raw.split(",") : [...raw];
+  const patterns: string[] = [];
+  for (const part of parts) {
+    const pattern = part.trim();
+    if (pattern.length === 0) continue;
+    if (!isBranchPattern(pattern)) invalid(`${name} contains an invalid branch pattern`);
+    if (!patterns.includes(pattern)) patterns.push(pattern);
+  }
+  if (typeof raw === "string" && patterns.length === 0) return undefined;
+  return patterns;
+}
+
+function isBranchPattern(pattern: string): boolean {
+  if (pattern === "*") return true;
+  // A glob is valid when the name it describes is: `*` and `?` stand for ordinary characters.
+  return isValidBranchName(pattern.replaceAll("*", "x").replaceAll("?", "x"));
 }
 
 function blank(value: string | undefined): string | undefined {

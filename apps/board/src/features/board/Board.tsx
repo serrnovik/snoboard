@@ -12,6 +12,7 @@ import { useEditConfig } from "@/features/basket/edit-config";
 import { NewInitiativeDialog } from "@/features/basket/NewInitiativeDialog";
 import { pendingEditsFor, useBasket } from "@/features/basket/store";
 import { useRepoId } from "@/features/repo/context";
+import { useBoardRef } from "@/features/repo/branch-context";
 import { BoardCard } from "@/features/board/Card";
 import { DetailsDrawer } from "@/features/details/DetailsSheet";
 import { setOpenId } from "@/features/details/open";
@@ -194,6 +195,13 @@ function BoardBody({
   const openCounts = openCountsByProject(effective, payload.config.doneStatuses, projects);
   const labels = uniqueSorted(payload.items.flatMap((item) => item.labels ?? []));
   const defaultBranch = defaultBranchName(payload.refs);
+  const boardRef = useBoardRef();
+  useEffect(() => {
+    // Only the merged view marks the repository's default branch; a branch view marks itself.
+    if (boardRef.ref === null && defaultBranch !== null && defaultBranch !== boardRef.defaultBranch) {
+      boardRef.noteDefaultBranch(defaultBranch);
+    }
+  }, [boardRef, defaultBranch]);
   const ageFor = (status: string): ClosedAge =>
     showsAllClosed(query.showAllClosed, status) ? "all" : (ages.values[status] ?? DEFAULT_CLOSED_AGE);
   const sortFor = (status: string): ColumnSort => sorts.values[status] ?? DEFAULT_COLUMN_SORT;

@@ -170,9 +170,11 @@ repository still reads its own `.snoboard.yml` (or `configPath`).
 | `sshKeyFile` | for SSH | Path to a read-only deploy key |
 | `gitTokenFile` | no | Path to a git token file for private `https` remotes |
 | `configPath` | no | Config file to use instead of `.snoboard.yml` in that clone |
+| `branchListPatterns` | no | Branch globs the branch picker lists. Default `["*"]` (every remote branch; the newest 500 are shown, at most 2000 are fetched). The default branch is always listed. Single repo: `SNOBOARD_BRANCH_LIST_PATTERNS` |
 | `edit.modes` | no | `direct`, `pr`, or both. Empty or missing: that repository is read-only |
 | `edit.baseBranch` | no | Branch pull requests target. Default: that repository's `defaultBranch` |
 | `edit.directBranch` | with `direct` | Branch `direct` updates |
+| `edit.directBranches` | no | Branch globs `direct` may push to when the board shows one branch, e.g. `["main", "feat/*"]` or `["*"]`. Default: only `edit.directBranch`. Single repo: `SNOBOARD_EDIT_DIRECT_BRANCHES` |
 | `edit.botTokenFile` | no | Bot token for password and Cloudflare Access users, for this repository only |
 | `edit.githubWriteScope` | no | `repo` or `public_repo` for the GitHub write grant. Default: `SNOBOARD_GITHUB_WRITE_SCOPE` |
 | `issues` | no | Trackers for this repository only. `github.repo` is `owner/name` (same as `forge.repo` so the read token is sent). `forgejo` is `baseUrl`, `repo` and an optional `tokenFile`. `vikunja` is `baseUrl`, an optional `tokenFile` and an optional `projectId` (for creating tasks) |
@@ -186,6 +188,7 @@ repos:
     edit:
       modes: [direct, pr]
       directBranch: main
+      directBranches: [main, "initiative/*", "feat/*"]
       botTokenFile: /var/run/secrets/acme/bot-token
     issues:
       github:
@@ -224,7 +227,7 @@ Unknown keys, duplicate ids, a missing key file, or credentials inside a URL sto
    `sshKeyFile`, `SNOBOARD_GIT_TOKEN_FILE` to `gitTokenFile`, `SNOBOARD_CONFIG_PATH` to `configPath`,
    `SNOBOARD_EDIT_MODES` to `edit.modes`, `SNOBOARD_EDIT_BASE_BRANCH` to `edit.baseBranch`,
    `SNOBOARD_EDIT_DIRECT_BRANCH` to `edit.directBranch`, `SNOBOARD_EDIT_BOT_TOKEN_FILE` to `edit.botTokenFile`.
-2. Use `id: default` to keep existing browser baskets and remembered submit modes (`snoboard:basket:v1:default`,
+2. Use `id: default` to keep existing browser baskets and remembered submit modes (`snoboard:basket:v1:default:<branch>`,
    `snoboard:submit-mode:v1:default`). Another id starts with an empty basket.
 3. Set `SNOBOARD_REPOS_FILE`, then remove the single-repo variables.
 

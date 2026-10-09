@@ -1,6 +1,7 @@
 // Browser-safe entry point: no git or filesystem access. The board's client
 // bundle imports from "snoboard/browser"; server code uses "snoboard".
 export { VERSION } from "./version.js";
+export { branchPatternToRegExp, isValidBranchName, matchesBranchPatterns, MAX_BRANCH_NAME_LENGTH } from "./refs.js";
 export { ConfigSchema, loadConfig, type Config, type LabelDisplay, type ProjectDisplay } from "./config.js";
 export {
   InitiativeFrontmatterSchema,

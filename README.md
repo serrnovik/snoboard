@@ -28,6 +28,7 @@ It comes in three parts:
 - **Filters and search.** Filter by project, label and priority. Search by id or title. Filters live in the URL, so a filtered view can be shared as a link.
 - **Card details.** Cards show `blocked` and `ready` badges, phase progress, issue counts, and the branch an initiative lives on.
 - **Branches.** Initiatives that exist only on an `initiative/*` branch still appear. A legacy list shows folders without frontmatter.
+- **Branch view.** The branch chip in the header switches the board from all branches merged to one branch alone (searchable, newest first, shareable as `?ref=<branch>`). Edits then push to that branch or open a PR into it.
 - **Themes.** Light, dark or system.
 
 ![Dark theme](docs/img/board-dark.png)
@@ -82,8 +83,10 @@ Edits collect in a basket in the browser. Nothing is written until you submit.
 
 The **Submit** dialog validates the basket on the server, then writes it in one of two ways:
 
-- **Push** commits to the configured branch.
-- **Open a pull request** creates an edit branch and a PR.
+- **Push** commits to the configured branch, or to the branch the board shows when `edit.directBranches` allows it.
+- **Open a pull request** creates an edit branch and a PR (into the shown branch, if one is selected).
+
+Each branch keeps its own basket; switching branch with pending edits asks first and keeps them for their branch.
 
 The dialog remembers your choice for each repository. If a direct push is rejected, `Open a PR instead` retries the same basket as a PR.
 

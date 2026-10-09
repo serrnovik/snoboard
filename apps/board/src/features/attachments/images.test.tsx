@@ -112,7 +112,7 @@ describe("image attachments", () => {
       contentType: "image/png",
       size: PNG.length,
     });
-    const stored = JSON.parse(localStorage.getItem("snoboard:basket:v1:default") ?? "[]") as Record<string, unknown>[];
+    const stored = JSON.parse(localStorage.getItem("snoboard:basket:v1:default:main") ?? "[]") as Record<string, unknown>[];
     expect(JSON.stringify(stored)).not.toContain("base64");
     expect(images.size()).toBe(1);
 

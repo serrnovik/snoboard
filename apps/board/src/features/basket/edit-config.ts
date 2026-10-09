@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isValidBranchName } from "snoboard/browser";
 import { redirectToLogin } from "@/features/board/sync";
 import { useRepoId } from "@/features/repo/context";
 import { repoApi } from "@/lib/routes";
@@ -18,6 +19,12 @@ export type ClientEditConfig = {
   csrf?: string;
   directBranch?: string;
   baseBranch?: string;
+  /** Repository default branch. */
+  defaultBranch?: string;
+  /** Branch the board shows (`?ref=`); submits go to it. */
+  branch?: string;
+  /** Whether `direct` may push to `branch` (edit.directBranches). When false, `direct` is not offered. */
+  directAllowed?: boolean;
   /** GitHub owner/name, for https links to commits. */
   forgeRepo?: string;
   /** Tracker link settings (no tokens): Vikunja/Forgejo sites and the repos `gh#n` / `fj#n` mean. */
@@ -63,11 +70,15 @@ export function useEditConfig(): ClientEditConfig & { ready: boolean } {
 
 export function parseEditConfig(value: unknown): ClientEditConfig {
   if (!isRecord(value)) return { ...EMPTY_CONFIG };
-  const modes = Array.isArray(value.modes)
-    ? value.modes.filter((mode): mode is EditModeName => mode === "pr" || mode === "direct")
-    : [];
+  const branch = typeof value.branch === "string" && isValidBranchName(value.branch) ? value.branch : undefined;
+  const directAllowed = value.directAllowed === true;
+  const modes = (
+    Array.isArray(value.modes)
+      ? value.modes.filter((mode): mode is EditModeName => mode === "pr" || mode === "direct")
+      : []
+  ).filter((mode) => branch === undefined || mode !== "direct" || directAllowed);
   const defaultMode: EditModeName =
-    value.defaultMode === "direct" || value.defaultMode === "pr"
+    (value.defaultMode === "direct" || value.defaultMode === "pr") && modes.includes(value.defaultMode)
       ? value.defaultMode
       : modes.includes("direct")
         ? "direct"
@@ -87,6 +98,8 @@ export function parseEditConfig(value: unknown): ClientEditConfig {
       ? { directBranch: value.directBranch }
       : {}),
     ...(typeof value.baseBranch === "string" && value.baseBranch.length > 0 ? { baseBranch: value.baseBranch } : {}),
+    ...(isValidBranchName(value.defaultBranch) ? { defaultBranch: value.defaultBranch } : {}),
+    ...(branch === undefined ? {} : { branch, directAllowed }),
     ...(typeof value.forgeRepo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.forgeRepo)
       ? { forgeRepo: value.forgeRepo }
       : {}),

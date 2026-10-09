@@ -123,7 +123,7 @@ describe("graph refresh", () => {
 
     render(
       <Harness>
-        <GraphView refreshTimeoutMs={40} />
+        <GraphView refreshTimeoutMs={400} />
       </Harness>,
     );
     expect(await screen.findByLabelText("Dependency graph")).toBeTruthy();

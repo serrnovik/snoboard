@@ -22,6 +22,9 @@ import { CircleAlert, CircleCheck } from "lucide-react";
 import type { Edit } from "snoboard/browser";
 import { repoApi } from "@/lib/routes";
 import { getImage } from "@/features/attachments/store";
+import { useBoardRef } from "@/features/repo/branch-context";
+
+const MERGED_VIEW = "All branches (merged)";
 
 type SubmitSuccess = {
   ok: true;
@@ -87,10 +90,18 @@ export function rememberSubmitMode(repoId: string, mode: EditModeName): void {
   localStorage.setItem(submitModeStorageKey(repoId), mode);
 }
 
-export function formatSubmitMode(mode: EditModeName, directBranch?: string): string {
-  if (mode === "pr") return "Open a pull request";
-  const branch = directBranch === undefined || directBranch.length === 0 ? "main" : directBranch;
-  return branch === "main" ? "Push to main" : `Push to ${branch}`;
+/** `selected`: the branch the board shows; direct pushes to it and the pull request targets it. */
+export function formatSubmitMode(mode: EditModeName, directBranch?: string, selected?: string): string {
+  if (mode === "pr") return selected === undefined ? "Open a pull request" : `Open a pull request into ${selected}`;
+  const branch = selected ?? (directBranch === undefined || directBranch.length === 0 ? "main" : directBranch);
+  return `Push to ${branch}`;
+}
+
+/** Where this submit lands, for the dialog: the selected branch, or the merged view and its target. */
+export function submitBranchLabel(selected: string | null, mode: EditModeName, config: ClientEditConfig | null): string {
+  if (selected !== null) return selected;
+  const target = mode === "direct" ? config?.directBranch : (config?.baseBranch ?? config?.defaultBranch);
+  return target === undefined ? MERGED_VIEW : `${MERGED_VIEW}, saved to ${target}`;
 }
 
 /** Pending "submit after connecting GitHub", kept for one redirect round trip. */
@@ -171,6 +182,7 @@ export function SubmitDialog({
   titles?: ReadonlyMap<string, string>;
 }) {
   const basket = useBasket(repoId);
+  const { ref: selectedBranch } = useBoardRef();
   const [open, setOpen] = useState(false);
   const modeGroup = useId();
   const [config, setConfig] = useState<ClientEditConfig | null>(null);
@@ -331,6 +343,7 @@ export function SubmitDialog({
           mode: nextMode,
           csrf: current.csrf,
           repo: repoId,
+          ...(selectedBranch === null ? {} : { branch: selectedBranch }),
           ...(Object.keys(attachments.map).length === 0 ? {} : { attachments: attachments.map }),
         }),
       });
@@ -408,6 +421,9 @@ export function SubmitDialog({
           <DialogTitle>Submit basket</DialogTitle>
           <DialogDescription>Check the edits, then save them. Nothing is written until this succeeds.</DialogDescription>
         </DialogHeader>
+        <p data-testid="submit-branch" className="text-sm">
+          Branch: <strong className="font-mono">{submitBranchLabel(selectedBranch, mode, config)}</strong>
+        </p>
         {checking ? <p data-testid="submit-checking">Checking the basket…</p> : null}
         {problem !== null ? (
           <p role="alert" className="text-sm text-destructive">
@@ -524,7 +540,7 @@ export function SubmitDialog({
                   checked={mode === entry}
                   onChange={() => chooseMode(entry)}
                 />
-                {formatSubmitMode(entry, config.directBranch)}
+                {formatSubmitMode(entry, config.directBranch, selectedBranch ?? undefined)}
               </label>
             ))}
           </fieldset>

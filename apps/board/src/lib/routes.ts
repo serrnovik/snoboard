@@ -17,9 +17,27 @@ export function graphPath(repoId: string): string {
   return `/r/${repoId}/graph`;
 }
 
+const activeRefs = new Map<string, string>();
+
+/** The branch the board shows for `repoId` (null: merged view). Read API calls follow it. */
+export function setActiveRef(repoId: string, ref: string | null): void {
+  if (ref === null) activeRefs.delete(repoId);
+  else activeRefs.set(repoId, ref);
+}
+
+export function activeRef(repoId: string): string | null {
+  return activeRefs.get(repoId) ?? null;
+}
+
+/** Routes that never take `?ref=`: the list itself, refresh, and submit (which names its branch in the body). */
+const REF_FREE = /^\/(branches|refresh|edits\/submit|issues\/)/;
+
 export function repoApi(repoId: string, path: string): string {
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return `/api/repos/${encodeURIComponent(repoId)}${suffix}`;
+  const base = `/api/repos/${encodeURIComponent(repoId)}${suffix}`;
+  const ref = activeRefs.get(repoId);
+  if (ref === undefined || REF_FREE.test(suffix)) return base;
+  return `${base}${base.includes("?") ? "&" : "?"}ref=${encodeURIComponent(ref)}`;
 }
 
 export function repoIdFromPath(pathname: string): string | null {
@@ -86,6 +104,8 @@ export function legacyRedirectPath(
 function searchForOtherRepo(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("open");
+  // A branch belongs to one repository; the next one opens on its own remembered branch.
+  params.delete("ref");
   const rest = params.toString();
   return rest.length === 0 ? "" : `?${rest}`;
 }

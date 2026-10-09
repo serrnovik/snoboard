@@ -1,4 +1,5 @@
 export { VERSION } from "./version.js";
+export { branchPatternToRegExp, isValidBranchName, matchesBranchPatterns, MAX_BRANCH_NAME_LENGTH } from "./refs.js";
 
 export {
   fetch,
