@@ -208,6 +208,56 @@ Seats are metered daily per workspace. Back to the [final report](final.report.m
 - Active seat = signed in during the day.
 - Counts are stored per day and summed per invoice period.
 `);
+// Initiative documents: a roadmap that links to a phase packet and a phase task file.
+const billing = path.join(work, "initiatives/acme/002-billing");
+mkdirSync(path.join(billing, "phases/phase-1"), { recursive: true });
+writeFileSync(path.join(billing, "ROADMAP.md"), `# Billing roadmap
+
+Usage-based billing ships in three phases. Each phase has a packet with its scope and tasks.
+
+| Phase | Packet | Status |
+| --- | --- | --- |
+| 1. Metering | [phase 1 packet](phases/phase-1.packet.md) | done |
+| 2. Invoices | [phase 2 packet](phases/phase-2.packet.md) | in progress |
+| 3. Dunning | not written yet | planned |
+
+## Principles
+
+- Meter once a day, bill once a month.
+- Every invoice line can be traced back to a metering record.
+
+See the [rollout report](reports/final.report.md) for results so far.
+`);
+writeFileSync(path.join(billing, "phases/phase-1.packet.md"), `# Phase 1 packet: Metering
+
+Back to the [roadmap](../ROADMAP.md).
+
+## Scope
+
+Count active seats per workspace and day, and store the counts for invoicing.
+
+## Tasks
+
+- [T1.1 Seat counter](phase-1/T1.1-seat-counter.md)
+- T1.2 Daily rollup job
+
+## Done when
+
+- [x] Counts are stored per day.
+- [x] Counts match the audit log within 1%.
+`);
+writeFileSync(path.join(billing, "phases/phase-1/T1.1-seat-counter.md"), `# T1.1 Seat counter
+
+Part of the [phase 1 packet](../phase-1.packet.md#tasks).
+
+A seat is active when its user signed in during the UTC day.
+`);
+writeFileSync(path.join(billing, "phases/phase-2.packet.md"), `# Phase 2 packet: Invoices
+
+Back to the [roadmap](../ROADMAP.md).
+
+Monthly invoices with line items, downloadable as PDF.
+`);
 commit("Demo initiatives", "2026-09-28T09:00:00Z");
 
 // A branch that moves acme-003 forward after main last touched it.

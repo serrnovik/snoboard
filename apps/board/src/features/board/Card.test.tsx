@@ -131,5 +131,19 @@ describe("report count", () => {
   it("stays hidden without reports", () => {
     render(<BoardCard item={item()} doneStatuses={["done"]} defaultBranch="main" />);
     expect(screen.queryByTestId("report-count")).toBeNull();
+    expect(screen.queryByTestId("doc-count")).toBeNull();
+  });
+
+  it("shows how many documents the initiative has", () => {
+    const withDocs = {
+      ...item(),
+      docs: [
+        { path: "ROADMAP", kind: "initiative-doc" as const, formats: ["md" as const], title: "ROADMAP" },
+        { path: "phases/phase-1.packet", kind: "phase-doc" as const, formats: ["md" as const], title: "phase-1.packet", phase: 1 },
+        { path: "phases/phase-1/T1.1-a", kind: "task" as const, formats: ["md" as const], title: "T1.1-a", phase: 1 },
+      ],
+    };
+    render(<BoardCard item={withDocs} doneStatuses={["done"]} defaultBranch="main" />);
+    expect(screen.getByTestId("doc-count").textContent).toBe("3 docs");
   });
 });

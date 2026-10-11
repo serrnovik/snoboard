@@ -1,24 +1,30 @@
-import { ChevronLeft, ChevronRight, ExternalLink, FileText } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, ListChecks } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BoardItem } from "snoboard/browser";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ReportMarkdown } from "@/components/report-markdown";
 import { redirectToLogin } from "@/features/board/sync";
 import type { ForgeLinkConfig } from "./links.js";
+import type { Report } from "./report-links.js";
 import {
-  defaultFormat,
-  forgeReportUrl,
-  orderedReports,
-  reportFileUrl,
-  reportImageSrc,
-  reportLinkTarget,
-  type Report,
-  type ReportFormat,
-} from "./report-links.js";
+  defaultDocFormat,
+  docChipLabel,
+  docFileUrl,
+  docImageSrc,
+  docLinkTarget,
+  findAnchor,
+  forgeDocUrl,
+  groupViewerDocs,
+  viewerDocs,
+  type DocEntry,
+  type DocFormat,
+  type ViewerDoc,
+} from "./doc-links.js";
 
-type ReportItem = Pick<BoardItem, "id" | "path" | "sourceRef" | "reports" | "phases">;
+type ReportItem = Pick<BoardItem, "id" | "path" | "sourceRef" | "reports" | "docs" | "phases">;
 
-export type ReportSelection = { index: number; format: ReportFormat };
+/** The open document (index into `viewerDocs(item)`), its format and an optional `#anchor` to scroll to. */
+export type ReportSelection = { index: number; format: DocFormat; anchor?: string };
 
 const chipClass =
   "inline-flex max-w-full items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
@@ -31,7 +37,7 @@ export function ReportChip({
 }: {
   report: Report;
   label: string;
-  onOpen: (report: Report) => void;
+  onOpen: (key: string) => void;
 }) {
   return (
     <button
@@ -39,7 +45,7 @@ export function ReportChip({
       className={chipClass}
       data-testid={`report-chip-${report.name}`}
       title={`${report.name} (${report.formats.join(", ")})`}
-      onClick={() => onOpen(report)}
+      onClick={() => onOpen(`reports/${report.name}`)}
     >
       <FileText aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{label}</span>
@@ -47,7 +53,64 @@ export function ReportChip({
   );
 }
 
-/** Large report viewer: markdown rendered by the board, HTML in a script-less sandboxed frame. */
+/** Chips for a phase's documents: packets and other phase files, then an expandable "N tasks". */
+export function PhaseDocChips({
+  phase,
+  docs,
+  onOpen,
+}: {
+  phase: number;
+  docs: readonly DocEntry[];
+  onOpen: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (docs.length === 0) return null;
+  const files = docs.filter((doc) => doc.kind !== "task");
+  const tasks = docs.filter((doc) => doc.kind === "task");
+  const chip = (doc: DocEntry) => (
+    <button
+      key={doc.path}
+      type="button"
+      className={chipClass}
+      data-testid={`doc-chip-${doc.path}`}
+      title={`${doc.path} (${doc.formats.join(", ")})`}
+      onClick={() => onOpen(doc.path)}
+    >
+      <FileText aria-hidden="true" className="size-3 shrink-0" />
+      <span className="truncate">{docChipLabel(doc)}</span>
+    </button>
+  );
+  return (
+    <span className="mt-1 flex flex-col gap-1" data-testid={`phase-docs-${phase}`}>
+      <span className="flex flex-wrap gap-1">
+        {files.map(chip)}
+        {tasks.length > 0 ? (
+          <button
+            type="button"
+            className={chipClass}
+            aria-expanded={open}
+            data-testid={`phase-tasks-toggle-${phase}`}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <ListChecks aria-hidden="true" className="size-3 shrink-0" />
+            {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
+            <ChevronDown aria-hidden="true" className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+        ) : null}
+      </span>
+      {open ? (
+        <span className="flex flex-wrap gap-1" data-testid={`phase-tasks-${phase}`}>
+          {tasks.map(chip)}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Large document viewer: a navigation tree of the initiative's documents (Initiative, Phase N,
+ * Reports) next to the content; markdown rendered by the board, HTML in a script-less sandboxed frame.
+ */
 export function ReportDialog({
   item,
   repoId,
@@ -63,39 +126,40 @@ export function ReportDialog({
   onSelect: (selection: ReportSelection) => void;
   onClose: () => void;
 }) {
-  const reports = orderedReports(item);
-  const report = selection === null ? undefined : reports[selection.index];
-  const format = report === undefined || selection === null ? "md" : report.formats.includes(selection.format) ? selection.format : defaultFormat(report);
-  const count = reports.length;
+  const docs = viewerDocs(item);
+  const doc = selection === null ? undefined : docs[selection.index];
+  const format =
+    doc === undefined || selection === null ? "md" : doc.formats.includes(selection.format) ? selection.format : defaultDocFormat(doc);
+  const count = docs.length;
   const index = selection?.index ?? 0;
   const go = (next: number) => {
-    const target = reports[next];
-    if (target !== undefined) onSelect({ index: next, format: defaultFormat(target) });
+    const target = docs[next];
+    if (target !== undefined) onSelect({ index: next, format: defaultDocFormat(target) });
   };
-  const raw = report === undefined ? null : forgeReportUrl(forge, item, report, format);
+  const raw = doc === undefined ? null : forgeDocUrl(forge, item, doc, format);
   return (
     <Dialog
-      open={report !== undefined}
+      open={doc !== undefined}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
       <DialogContent
         data-testid="report-dialog"
-        className="flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none! flex-col gap-3 overflow-hidden p-0 sm:max-w-[min(calc(100vw-2rem),1400px)]!"
+        className="flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none! flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(calc(100vw-2rem),1400px)]!"
         onKeyDown={(event) => {
           if (event.target instanceof HTMLElement && event.target.closest("input,textarea,select")) return;
           if (event.key === "ArrowLeft" && index > 0) go(index - 1);
           if (event.key === "ArrowRight" && index < count - 1) go(index + 1);
         }}
       >
-        {report !== undefined ? (
+        {doc !== undefined ? (
           <>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-3 pr-12">
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  aria-label="Previous report"
+                  aria-label="Previous document"
                   data-testid="report-prev"
                   disabled={index === 0}
                   onClick={() => go(index - 1)}
@@ -108,7 +172,7 @@ export function ReportDialog({
                 </span>
                 <button
                   type="button"
-                  aria-label="Next report"
+                  aria-label="Next document"
                   data-testid="report-next"
                   disabled={index >= count - 1}
                   onClick={() => go(index + 1)}
@@ -118,15 +182,16 @@ export function ReportDialog({
                 </button>
               </div>
               <div className="min-w-0 flex-1">
-                <DialogTitle className="truncate font-mono text-sm">{report.name}</DialogTitle>
+                <DialogTitle className="truncate font-mono text-sm">{doc.key}</DialogTitle>
                 <DialogDescription className="text-xs">
                   {item.id}
-                  {report.phase !== undefined ? ` · phase ${report.phase}` : ""}
+                  {doc.phase !== undefined ? ` · phase ${doc.phase}` : ""}
+                  {doc.kind === "task" ? " · task" : ""}
                 </DialogDescription>
               </div>
-              {report.formats.length > 1 ? (
+              {doc.formats.length > 1 ? (
                 <div role="group" aria-label="Format" className="inline-flex rounded-md border text-xs">
-                  {report.formats.map((option) => (
+                  {doc.formats.map((option) => (
                     <button
                       key={option}
                       type="button"
@@ -148,29 +213,66 @@ export function ReportDialog({
                   data-testid="report-raw"
                   className="inline-flex items-center gap-1 text-xs text-primary underline-offset-4 hover:underline"
                 >
-                  Open raw on GitHub
+                  Open on GitHub
                   <ExternalLink aria-hidden="true" className="size-3" />
                 </a>
               ) : null}
             </header>
-            <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
-              {format === "html" ? (
-                <HtmlReport src={reportFileUrl(repoId, item.id, `${report.name}.html`)} title={report.name} />
-              ) : (
-                <MarkdownReport
-                  item={item}
-                  repoId={repoId}
-                  forge={forge}
-                  report={report}
-                  reports={reports}
-                  onSelect={onSelect}
-                />
-              )}
+            <div className="flex min-h-0 flex-1">
+              <DocNav docs={docs} index={index} onOpen={go} />
+              <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3" data-testid="doc-content">
+                {format === "html" ? (
+                  <HtmlReport src={docFileUrl(repoId, item.id, `${doc.key}.html`)} title={doc.key} />
+                ) : (
+                  <MarkdownDoc
+                    item={item}
+                    repoId={repoId}
+                    forge={forge}
+                    doc={doc}
+                    docs={docs}
+                    anchor={selection?.anchor}
+                    onSelect={onSelect}
+                  />
+                )}
+              </div>
             </div>
           </>
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Left navigation tree of the viewer; hidden on narrow screens (prev / next still work). */
+function DocNav({ docs, index, onOpen }: { docs: readonly ViewerDoc[]; index: number; onOpen: (index: number) => void }) {
+  return (
+    <nav
+      aria-label="Documents"
+      data-testid="doc-nav"
+      className="hidden w-60 shrink-0 overflow-auto border-r px-2 py-3 text-xs md:block"
+    >
+      {groupViewerDocs(docs).map(({ group, entries }) => (
+        <div key={group} className="mb-3">
+          <h3 className="px-2 pb-1 font-medium text-muted-foreground">{group}</h3>
+          <ul className="flex flex-col">
+            {entries.map(({ doc, index: entryIndex }) => (
+              <li key={doc.key}>
+                <button
+                  type="button"
+                  data-testid={`doc-nav-${doc.key}`}
+                  aria-current={entryIndex === index ? "page" : undefined}
+                  title={doc.key}
+                  onClick={() => onOpen(entryIndex)}
+                  className={`w-full truncate rounded-md px-2 py-1 text-left font-mono hover:bg-muted aria-[current=page]:bg-muted aria-[current=page]:font-medium ${doc.kind === "task" ? "pl-5" : ""}`}
+                >
+                  {doc.kind === "report" ? doc.key.slice("reports/".length) : doc.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </nav>
   );
 }
 
@@ -194,23 +296,32 @@ export function HtmlReport({ src, title }: { src: string; title: string }) {
 
 type MarkdownState = { phase: "loading" | "error" | "ready"; text: string };
 
-function MarkdownReport({
+function scrollToAnchor(root: HTMLElement | null, id: string): void {
+  if (root === null) return;
+  const target = findAnchor(root, id);
+  if (target !== null && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
+}
+
+function MarkdownDoc({
   item,
   repoId,
   forge,
-  report,
-  reports,
+  doc,
+  docs,
+  anchor,
   onSelect,
 }: {
   item: ReportItem;
   repoId: string;
   forge: ForgeLinkConfig;
-  report: Report;
-  reports: readonly Report[];
+  doc: ViewerDoc;
+  docs: readonly ViewerDoc[];
+  anchor: string | undefined;
   onSelect: (selection: ReportSelection) => void;
 }) {
   const [state, setState] = useState<MarkdownState>({ phase: "loading", text: "" });
-  const url = reportFileUrl(repoId, item.id, `${report.name}.md`);
+  const root = useRef<HTMLDivElement>(null);
+  const url = docFileUrl(repoId, item.id, `${doc.key}.md`);
   useEffect(() => {
     const controller = new AbortController();
     setState({ phase: "loading", text: "" });
@@ -222,23 +333,30 @@ function MarkdownReport({
           return;
         }
         if (!response.ok) {
-          setState({ phase: "error", text: `Could not load the report (${response.status})` });
+          setState({ phase: "error", text: `Could not load the document (${response.status})` });
           return;
         }
         const text = await response.text();
         if (!controller.signal.aborted) setState({ phase: "ready", text });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setState({ phase: "error", text: "Could not load the report" });
+        if (!controller.signal.aborted) setState({ phase: "error", text: "Could not load the document" });
       });
     return () => controller.abort();
   }, [url]);
 
+  // A link like `phase-1.packet.md#scope` lands on the heading once the markdown has rendered.
+  useEffect(() => {
+    if (state.phase !== "ready" || anchor === undefined) return;
+    const frame = requestAnimationFrame(() => scrollToAnchor(root.current, anchor));
+    return () => cancelAnimationFrame(frame);
+  }, [state.phase, anchor, state.text]);
+
   const folder = item.path.slice(0, item.path.lastIndexOf("/"));
   const renderLink = useCallback(
     (href: string, children: ReactNode) => {
-      const target = reportLinkTarget(href, { name: report.name, reports, forge, sourceRef: item.sourceRef, folder });
-      if (target.kind === "report") {
+      const target = docLinkTarget(href, { from: doc.key, docs, forge, sourceRef: item.sourceRef, folder });
+      if (target.kind === "doc") {
         return (
           <a
             href={href}
@@ -247,7 +365,14 @@ function MarkdownReport({
             data-vike="false"
             onClick={(event) => {
               event.preventDefault();
-              onSelect({ index: target.index, format: target.format });
+              if (target.index === docs.indexOf(doc) && target.format === "md" && target.anchor !== undefined) {
+                scrollToAnchor(root.current, target.anchor);
+              }
+              onSelect(
+                target.anchor === undefined
+                  ? { index: target.index, format: target.format }
+                  : { index: target.index, format: target.format, anchor: target.anchor },
+              );
             }}
           >
             {children}
@@ -261,13 +386,26 @@ function MarkdownReport({
           </a>
         );
       }
-      if (target.kind === "anchor") return <a href={target.href}>{children}</a>;
+      if (target.kind === "anchor") {
+        return (
+          <a
+            href={`#${target.id}`}
+            data-vike="false"
+            onClick={(event) => {
+              event.preventDefault();
+              scrollToAnchor(root.current, target.id);
+            }}
+          >
+            {children}
+          </a>
+        );
+      }
       return <span className="underline decoration-dotted">{children}</span>;
     },
-    [report.name, reports, forge, item.sourceRef, folder, onSelect],
+    [doc, docs, forge, item.sourceRef, folder, onSelect],
   );
 
-  if (state.phase === "loading") return <p className="py-4 text-sm text-muted-foreground">Loading report…</p>;
+  if (state.phase === "loading") return <p className="py-4 text-sm text-muted-foreground">Loading document…</p>;
   if (state.phase === "error") {
     return (
       <p role="alert" className="my-4 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
@@ -276,26 +414,55 @@ function MarkdownReport({
     );
   }
   return (
-    <ReportMarkdown
-      markdown={state.text}
-      resolveImage={(src) => reportImageSrc(src, { repoId, id: item.id, name: report.name })}
-      renderLink={renderLink}
-    />
+    <div ref={root}>
+      <ReportMarkdown
+        markdown={state.text}
+        resolveImage={(src) => docImageSrc(src, { repoId, id: item.id, from: doc.key })}
+        renderLink={renderLink}
+      />
+    </div>
   );
 }
 
 /**
- * "Reports" section of the details panel (initiative-level reports) plus the dialog. Phase
- * reports show as chips in the phase table through `openReport`.
+ * State of the document viewer. `openDoc` takes a key from `viewerDocs` (`ROADMAP`,
+ * `phases/phase-1.packet`, `reports/final.report`).
  */
 export function useReportViewer(item: ReportItem) {
   const [selection, setSelection] = useState<ReportSelection | null>(null);
-  const reports = orderedReports(item);
-  const openReport = (report: Report) => {
-    const index = reports.findIndex((entry) => entry.name === report.name);
-    if (index !== -1) setSelection({ index, format: defaultFormat(report) });
+  const docs = viewerDocs(item);
+  const openDoc = (key: string) => {
+    const index = docs.findIndex((entry) => entry.key === key);
+    const doc = docs[index];
+    if (doc !== undefined) setSelection({ index, format: defaultDocFormat(doc) });
   };
-  return { selection, setSelection, openReport };
+  return { selection, setSelection, openDoc };
+}
+
+/** "Documents" section of the details panel: initiative-level documents (ROADMAP, CONVENTIONS, phases/README, ...). */
+export function DocumentsSection({ docs, onOpen }: { docs: readonly DocEntry[]; onOpen: (key: string) => void }) {
+  if (docs.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-2" data-testid="docs-section">
+      <h2 className="text-sm font-medium">Documents</h2>
+      <ul className="flex flex-col gap-1 text-sm">
+        {docs.map((doc) => (
+          <li key={doc.path} className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              data-testid={`doc-open-${doc.path}`}
+              onClick={() => onOpen(doc.path)}
+              className="inline-flex min-w-0 items-center gap-1 text-left text-primary underline-offset-4 hover:underline"
+            >
+              <FileText aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="truncate font-mono text-xs">{doc.path}</span>
+            </button>
+            <span className="text-xs text-muted-foreground">{doc.formats.join(" · ")}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 export function ReportsSection({
@@ -303,7 +470,7 @@ export function ReportsSection({
   onOpen,
 }: {
   reports: readonly Report[];
-  onOpen: (report: Report) => void;
+  onOpen: (key: string) => void;
 }) {
   if (reports.length === 0) return null;
   return (
@@ -315,7 +482,7 @@ export function ReportsSection({
             <button
               type="button"
               data-testid={`report-open-${report.name}`}
-              onClick={() => onOpen(report)}
+              onClick={() => onOpen(`reports/${report.name}`)}
               className="inline-flex min-w-0 items-center gap-1 text-left text-primary underline-offset-4 hover:underline"
             >
               <FileText aria-hidden="true" className="size-3.5 shrink-0" />

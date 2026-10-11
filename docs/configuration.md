@@ -287,7 +287,8 @@ is no switch to allow scripts.
 ### Report endpoint
 
 `GET /api/repos/<repo>/initiatives/<id>/reports/<file>` (and `.../reports/<folder>/<file>`) answers one file, read
-from the clone at the tip of the initiative's source branch. The blob is fetched on demand.
+from the clone at the tip of the initiative's source branch. The blob is fetched on demand. It is an alias of
+`.../docs/reports/<file>` (see [Documents](#documents)).
 
 | Request | Answer |
 | --- | --- |
@@ -298,3 +299,63 @@ from the clone at the tip of the initiative's source branch. The blob is fetched
 
 It uses the board's sign-in. Every answer has `X-Content-Type-Options: nosniff` and `Cache-Control: private,
 no-store`. The threat model is in [SECURITY.md](../SECURITY.md#report-rendering).
+
+## Documents
+
+The other `.md` and `.html` files of an initiative folder are its documents: phase packets, task files, prompts, a
+roadmap. Snoboard lists them next to the reports and opens them in the same viewer. There is nothing to configure.
+
+```text
+initiatives/acme/002-billing/
+  initiative.md              # the initiative itself, not a document
+  ROADMAP.md                 # initiative document
+  CONVENTIONS.md             # initiative document
+  phases/
+    README.md                # phase document without a phase: listed with the initiative documents
+    execute.prompt.md        # same
+    phase-1.packet.md        # phase 1
+    phase-2a.packet.md       # phase 2
+    phase-3.1.packet.md      # phase 3
+    phase-4-rollout.packet.md  # phase 4
+    00-investigation.md      # phase 0 (number prefix inside phases/)
+    phase-1/
+      T1.1-schema.md         # task of phase 1
+  reports/                   # reports, see above
+```
+
+- Only `.md` and `.html` files count, at most three levels below the initiative folder (`phases/phase-1/T1.1-x.md`).
+  Names use letters, digits, `.`, `_` and `-`, and do not start with a dot. Symlinks are ignored. `reports/` keeps
+  its own rules.
+- Kinds: a file in a per-phase folder of `phases/` is a **task**; other files in `phases/`, and top-level
+  `phase-<n>...` files, are **phase documents**; everything else is an **initiative document**.
+- Phase: `phase-<n>`, `phase-<n>a`, `phase-<n>.<m>` and `phase-<n>-<slug>` give phase `n`; inside `phases/` a number
+  prefix (`00-investigation.md`, `03-build.md`) does too; files in `phases/phase-<n>/` belong to phase `n`. A
+  document whose phase the initiative does not have is listed with the initiative documents.
+- The title is the file name; no file is read to list it. A `.md` and an `.html` with the same name are one document.
+- At most 300 documents per initiative are listed.
+
+### On the board
+
+- **Card:** a small "N docs" mark next to "N reports".
+- **Details panel:** a **Documents** section with the initiative documents, and on each phase row chips for that
+  phase's documents (`packet`, `investigation`, ...) plus an "N tasks" chip that expands the task files.
+- **Viewer:** the report viewer with a navigation tree (Initiative, Phase N, Reports) on wide screens. Previous and
+  next walk the same order. A relative link to another listed document or report (`phases/phase-1.packet.md`,
+  `../ROADMAP.md`, `phase-1/T1.1-x.md`) opens it in the viewer, `#heading` links scroll to the heading (also across
+  documents, `phase-1.packet.md#scope`), and **Open on GitHub** links to the file. Images with a relative path inside
+  the initiative folder (`img/flow.png`) load through the document endpoint. Rendering rules are the same as reports.
+
+### Document endpoint
+
+`GET /api/repos/<repo>/initiatives/<id>/docs/<path>` answers one file below the initiative folder, one URL-encoded
+segment per folder (`.../docs/phases/phase-1.packet.md`), read from the clone at the tip of the initiative's source
+branch (or the `?ref=` branch view). `.../docs/reports/<file>` serves reports with the report rules.
+
+| Request | Answer |
+| --- | --- |
+| A listed `.md` document | `text/plain; charset=utf-8` |
+| A listed `.html` document | `text/html; charset=utf-8` with the report HTML CSP (`sandbox`, no scripts, no network) |
+| A PNG, JPEG, WebP or GIF in the folder (at most 4 segments, strict names) | Its image type, by magic bytes, at most 5 MB |
+| `initiative.md`, an unlisted path, a file over 2 MB, a symlink, an encoded `/`, `..` | `404` |
+
+Headers and sign-in are the same as the report endpoint.

@@ -64,7 +64,7 @@ import { IssueCreateError, type CreatedIssue } from "./issues/provider.js";
 import { botTokenFileFor, editSettingsFor, findActiveRepo, listActiveRepos } from "./repos-config.js";
 import { DEFAULT_REPO_ID, getConfig, getSnapshot, getStatus } from "./store.js";
 import { initiativeHistory, snapshotPeople } from "./history.js";
-import { lookupReport, reportNotFound, reportResponse } from "./reports.js";
+import { lookupDocument, lookupReport, reportNotFound, reportResponse } from "./reports.js";
 import { boardDisplay, iconNotFound, iconResponse, lookupIcon } from "./icons.js";
 
 const REFRESH_WINDOW_MS = 30_000;
@@ -403,17 +403,51 @@ api.get("/repos/:repo/initiatives/:id/reports/:dir/:file", (c) =>
 );
 
 /**
+ * Any listed document of the initiative (`phases/phase-1.packet.md`, `ROADMAP.md`,
+ * `reports/final.report.md`) or an image next to one. The rest of the URL is the path below
+ * the initiative folder, one URL-encoded segment per folder; `/reports/...` stays as an alias.
+ */
+api.get("/repos/:repo/initiatives/:id/docs/*", (c) => {
+  const relative = docPathFromUrl(c.req.path);
+  if (relative === undefined) return reportNotFound();
+  return initiativeReportResponse(c, c.req.param("repo"), relative, lookupDocument);
+});
+
+/** `.../docs/phases/phase-1.packet.md` -> `phases/phase-1.packet.md`; undefined on bad encoding or empty/dot segments. */
+export function docPathFromUrl(urlPath: string): string | undefined {
+  const marker = urlPath.indexOf("/docs/");
+  if (marker === -1) return undefined;
+  const parts: string[] = [];
+  for (const raw of urlPath.slice(marker + "/docs/".length).split("/")) {
+    let part: string;
+    try {
+      part = decodeURIComponent(raw);
+    } catch {
+      return undefined;
+    }
+    if (part.length === 0 || part === "." || part === ".." || part.includes("/") || part.includes("\\")) return undefined;
+    parts.push(part);
+  }
+  return parts.length === 0 ? undefined : parts.join("/");
+}
+
+/**
  * A report under `<initiative folder>/reports/`, read from the clone at the source ref tip.
  * Only files the snapshot listed (regular `.md` / `.html` blobs) are answered; see `reports.ts`.
  */
-async function initiativeReportResponse(c: Context<BoardEnv>, repoId: string, relative: string): Promise<Response> {
+async function initiativeReportResponse(
+  c: Context<BoardEnv>,
+  repoId: string,
+  relative: string,
+  lookup: typeof lookupReport = lookupReport,
+): Promise<Response> {
   if (!isKnownRepo(repoId)) return reportNotFound();
   const view = await resolveView(c, repoId);
   const snapshot = view.ok ? view.snapshot : null;
   if (snapshot === null) return reportNotFound();
   const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
   if (item === undefined) return reportNotFound();
-  const found = lookupReport(snapshot, item, relative);
+  const found = lookup(snapshot, item, relative);
   if (!found.ok) return reportNotFound();
   const repoDir = initiativeRepoDir(repoId);
   if (repoDir === undefined) return reportNotFound();

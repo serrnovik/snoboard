@@ -68,6 +68,17 @@ render statically in a sandbox, without scripts. See [docs/configuration.md](doc
 
 ![Report viewer with a markdown report](docs/img/reports.png)
 
+### Phase and initiative documents
+
+Other `.md` / `.html` files in the initiative folder show too: phase packets (`phases/phase-1.packet.md`,
+`phase-2a`, `phase-3.1`, `phases/00-investigation.md`), task files (`phases/phase-1/T1.2-schema.md`) and initiative
+documents (`ROADMAP.md`, `CONVENTIONS.md`, `phases/README.md`). Phase rows get chips for their packet and an expandable
+"N tasks"; a **Documents** section lists the rest, and the card shows "N docs". The same viewer opens them, with a
+navigation tree (Initiative / Phase N / Reports), relative links between documents, `#anchors` and **Open on GitHub**.
+See [docs/configuration.md](docs/configuration.md#documents).
+
+![Document viewer with a phase packet](docs/img/docs.png)
+
 ### Editing basket
 
 Edits collect in a basket in the browser. Nothing is written until you submit.

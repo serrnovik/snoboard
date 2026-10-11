@@ -16,17 +16,20 @@ Sign-in (password, GitHub, Cloudflare Access) only decides who may view; see `do
 
 ### Report rendering
 
-Reports under `<initiative folder>/reports/` are written by anyone who can push to the repository, so their content is
+The same rules cover initiative documents (phase packets, task files, `ROADMAP.md`, ...), served by
+`GET /api/repos/<repo>/initiatives/<id>/docs/<path>`; the row "Reading files outside the initiative folder" below is
+specific to them. Reports under `<initiative folder>/reports/` are written by anyone who can push to the repository, so their content is
 untrusted. Assets: the viewer's session on the board, and the viewer's privacy (no tracking loads).
 
 | Threat | Control |
 | --- | --- |
 | Reading files outside `reports/` | The snapshot lists reports from the git tree: regular blobs only (mode `100644`/`100755`; symlinks and submodules are skipped), `.md` or `.html`, plain ASCII names, at most one folder below `reports/`. `GET /api/repos/<repo>/initiatives/<id>/reports/<file>` answers only a name in that list, built into `<folder>/reports/<name>` by the server; `..`, encoded separators and other extensions are `404`. Images below `reports/` must match a strict name pattern and are answered only when their magic bytes are PNG, JPEG, WebP or GIF (a symlink blob fails that check). |
+| Reading files outside the initiative folder (documents) | The snapshot lists documents from the git tree: regular blobs only, `.md` or `.html`, plain ASCII names (no leading dot, no `..`), at most three segments below the initiative folder; the initiative file itself is never a document. The `docs` endpoint decodes each URL segment, refuses empty, `.`/`..` and segments containing `/` or `\`, and answers only a path in that list, built into `<folder>/<path>` by the server. Images must match a strict name pattern (at most four segments) and have PNG, JPEG, WebP or GIF magic bytes. `docs/reports/...` goes through the report rules. |
 | Script in an HTML report | Served as `text/html` with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'self'; base-uri 'none'; form-action 'none'` and shown in an `<iframe sandbox="">` (no `allow-scripts`, no `allow-same-origin`): no script runs, the document has an opaque origin and cannot read board cookies, storage or the API, cannot submit forms, open pop-ups or navigate the board. There is no option to allow scripts. Opening the endpoint directly gets the same CSP `sandbox`. |
 | Tracking loads from a report | The HTML CSP allows no network fetches (only `data:` images and inline styles). Markdown is rendered by the board without raw HTML and sanitized; images load only from relative paths inside the initiative folder, through the authenticated endpoints. Remote and `data:` images in markdown are dropped. |
 | Script or HTML in a markdown report | Served as `text/plain` with `nosniff` and a `default-src 'none'; sandbox` CSP. The viewer skips raw HTML and runs `rehype-sanitize`. Links: other listed reports open in the viewer, other folder files open on the forge (`https:` only), `https:`/`mailto:` links open with `rel="noopener noreferrer"`, everything else is plain text. |
 | Unauthenticated access | Same sign-in as the board API; every answer has `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. |
-| Resource use | Listing reads trees only (no blobs). One blob is read per request, at most 2 MB per report and 5 MB per image (size checked with `git cat-file -s` before reading). At most 200 reports per initiative are listed. |
+| Resource use | Listing reads trees only (no blobs). One blob is read per request, at most 2 MB per report and 5 MB per image (size checked with `git cat-file -s` before reading). At most 200 reports and 300 documents per initiative are listed (and at most 1000 raw document files per folder are kept while walking the tree). |
 
 ### Icons
 

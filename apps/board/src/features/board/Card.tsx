@@ -128,6 +128,7 @@ export function BoardCard({
       ) : null}
       <div className="flex min-w-0 flex-wrap gap-1">
         <IssueCount issues={item.issues} />
+        <DocCount count={item.docs?.length ?? 0} />
         <ReportCount count={item.reports?.length ?? 0} />
         {blocked ? (
           <Tooltip>
@@ -234,6 +235,18 @@ function ReportCount({ count }: { count: number }) {
   const label = count === 1 ? "1 report" : `${count} reports`;
   return (
     <Badge variant="outline" data-testid="report-count" title={label} className="gap-1 text-muted-foreground!">
+      <FileText aria-hidden="true" className="size-3" />
+      {label}
+    </Badge>
+  );
+}
+
+/** Tiny "N docs" indicator (phase packets, tasks, ROADMAP, ...); listed with the board payload. */
+function DocCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  const label = count === 1 ? "1 doc" : `${count} docs`;
+  return (
+    <Badge variant="outline" data-testid="doc-count" title={label} className="gap-1 text-muted-foreground!">
       <FileText aria-hidden="true" className="size-3" />
       {label}
     </Badge>

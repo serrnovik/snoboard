@@ -12,6 +12,7 @@ import { changedSinceMergeBase,
 import { blockedBy, buildGraph, isReady, type Graph } from "./graph.js";
 import { parseIcon } from "./icons.js";
 import { parseInitiativeFile } from "./parse.js";
+import { groupDocs, type DocEntry } from "./documents.js";
 import { groupReports, type ReportEntry } from "./reports.js";
 import type { InitiativeFrontmatter } from "./schema.js";
 
@@ -40,6 +41,8 @@ export type BoardItem = InitiativeFrontmatter & {
   onBranches: string[];
   /** Files under the folder's `reports/` at the source ref tip; listed from trees only. */
   reports?: ReportEntry[];
+  /** Other `.md` / `.html` documents of the folder (phase packets, tasks, ROADMAP, ...); trees only. */
+  docs?: DocEntry[];
 };
 
 export type LegacyItem = {
@@ -159,7 +162,7 @@ export async function buildSnapshot(
           ? Promise.resolve(undefined)
           : changedSinceMergeBase(repoDir, defaultRefInfo.sha, ref.sha, root, options),
       ]);
-      return { ref, files: tree.files, reports: tree.reports, touches, changed };
+      return { ref, files: tree.files, reports: tree.reports, docs: tree.docs, touches, changed };
     }),
   );
   // Paths each branch edited itself; a copy that is merely older than main does not count.
@@ -279,6 +282,12 @@ export async function buildSnapshot(
       listed.find((entry) => entry.ref.name === candidate.ref.name)?.reports.get(
         candidate.path.slice(0, candidate.path.lastIndexOf("/")),
       ) ?? [],
+    ),
+    docs: groupDocs(
+      listed.find((entry) => entry.ref.name === candidate.ref.name)?.docs.get(
+        candidate.path.slice(0, candidate.path.lastIndexOf("/")),
+      ) ?? [],
+      candidate.path.slice(candidate.path.lastIndexOf("/") + 1),
     ),
   }));
 

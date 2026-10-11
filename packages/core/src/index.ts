@@ -33,6 +33,17 @@ export {
   type ReportEntry,
   type ReportFormat,
 } from "./reports.js";
+export {
+  classifyDoc,
+  groupDocs,
+  isDocFile,
+  MAX_DOC_BYTES,
+  MAX_DOC_DEPTH,
+  MAX_DOCS_PER_INITIATIVE,
+  type DocEntry,
+  type DocFormat,
+  type DocKind,
+} from "./documents.js";
 export { ConfigSchema, loadConfig, type Config, type LabelDisplay, type ProjectDisplay } from "./config.js";
 export {
   InitiativeFrontmatterSchema,

@@ -597,6 +597,103 @@ describe("read-only API", () => {
     }
   });
 
+  it("serves listed initiative documents through /docs/ (reports included), and nothing else", async () => {
+    const files = await readTree(demoRoot);
+    const configText = files[".snoboard.yml"];
+    if (configText === undefined) throw new Error("demo repo is missing .snoboard.yml");
+    const config = loadConfig(configText);
+    const folder = "initiatives/acme/001-onboarding";
+    const html = "<h1>Roadmap</h1><script>alert(1)</script>";
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const repo = await createTmpRepo({
+      commits: [
+        {
+          message: "demo",
+          files: {
+            ...files,
+            [`${folder}/ROADMAP.md`]: "# Roadmap\n\nSee [phase 1](phases/phase-1.packet.md).\n",
+            [`${folder}/ROADMAP.html`]: html,
+            [`${folder}/phases/phase-1.packet.md`]: "# Phase 1 packet\n",
+            [`${folder}/phases/phase-1/T1.1-schema.md`]: "# Task\n",
+            [`${folder}/phases/phase-1/deep/too-deep.md`]: "# no\n",
+            [`${folder}/phases/img/flow.png`]: png,
+            [`${folder}/phases/img/fake.png`]: "not an image",
+            [`${folder}/HUGE.md`]: "x".repeat(2 * 1024 * 1024 + 1),
+            [`${folder}/notes.txt`]: "no",
+            [`${folder}/reports/final.report.md`]: "# Final\n",
+            "initiatives/acme/002-billing/OTHER.md": "# Other\n",
+          },
+        },
+      ],
+    });
+    try {
+      const snapshot = await buildSnapshot(repo.dir, config);
+      seedStore(snapshot, config);
+      setInitiativeRepoDir(repo.dir);
+      const board = (await (await app.request("/api/board", authed())).json()) as {
+        items: Array<{ id: string; docs?: Array<{ path: string; kind: string; phase?: number }> }>;
+      };
+      expect(board.items.find((item) => item.id === "acme-001")?.docs?.map((doc) => [doc.path, doc.kind, doc.phase])).toEqual([
+        ["HUGE", "initiative-doc", undefined],
+        ["phases/phase-1.packet", "phase-doc", 1],
+        ["phases/phase-1/T1.1-schema", "task", 1],
+        ["ROADMAP", "initiative-doc", undefined],
+      ]);
+
+      const base = "/api/repos/default/initiatives/acme-001/docs";
+      const md = await app.request(`${base}/ROADMAP.md`, authed());
+      expect(md.status).toBe(200);
+      expect(md.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(md.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await md.text()).toContain("# Roadmap");
+
+      const page = await app.request(`${base}/ROADMAP.html`, authed());
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      const csp = page.headers.get("content-security-policy") ?? "";
+      expect(csp).toContain("sandbox");
+      expect(csp).not.toContain("script-src");
+
+      expect((await app.request(`${base}/phases/phase-1.packet.md`, authed())).status).toBe(200);
+      expect((await app.request(`${base}/phases/phase-1/T1.1-schema.md`, authed())).status).toBe(200);
+      expect((await app.request(`${base}/phases%2Fphase-1.packet.md`, authed())).status).toBe(404);
+      const report = await app.request(`${base}/reports/final.report.md`, authed());
+      expect(report.status).toBe(200);
+      expect(await report.text()).toBe("# Final\n");
+      const image = await app.request(`${base}/phases/img/flow.png`, authed());
+      expect(image.status).toBe(200);
+      expect(image.headers.get("content-type")).toBe("image/png");
+
+      expect((await app.request(`${base}/ROADMAP.md`)).status).toBe(401);
+
+      for (const route of [
+        `${base}/HUGE.md`,
+        `${base}/initiative.md`,
+        `${base}/notes.txt`,
+        `${base}/missing.md`,
+        `${base}/ROADMAP.htm`,
+        `${base}/phases/phase-1/deep/too-deep.md`,
+        `${base}/phases/img/fake.png`,
+        `${base}/..%2F002-billing%2FOTHER.md`,
+        `${base}/phases/..%2F..%2F002-billing%2FOTHER.md`,
+        `${base}/`,
+        "/api/repos/default/initiatives/acme-001/docs/OTHER.md",
+        "/api/repos/default/initiatives/acme-999/docs/ROADMAP.md",
+        "/api/repos/nope/initiatives/acme-001/docs/ROADMAP.md",
+      ]) {
+        const refused = await app.request(route, authed());
+        expect(refused.status, route).toBe(404);
+        expect(refused.headers.get("x-content-type-options"), route).toBe("nosniff");
+      }
+      // The URL parser folds these dot segments before routing; they must still never answer a file.
+      expect((await app.request(`${base}/../../002-billing/OTHER.md`, authed())).status).toBe(404);
+      expect((await app.request(`${base}/%2e%2e/002-billing/OTHER.md`, authed())).status).toBe(404);
+    } finally {
+      setInitiativeRepoDir(undefined);
+      await repo.remove();
+    }
+  });
+
   it("rejects unauthenticated, oversized, and oversized edit batches", async () => {
     const anonymous = await app.request("/api/edits/validate", {
       method: "POST",

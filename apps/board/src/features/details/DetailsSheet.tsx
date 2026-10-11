@@ -17,7 +17,8 @@ import { PeopleDetails } from "@/features/people/People";
 import { useBoardView } from "@/features/board/view-store";
 import { readinessPending } from "@/features/board/effective";
 import { SummaryMarkdown } from "./markdown.js";
-import { ReportChip, ReportDialog, ReportsSection, useReportViewer } from "./ReportViewer";
+import { DocumentsSection, PhaseDocChips, ReportChip, ReportDialog, ReportsSection, useReportViewer } from "./ReportViewer";
+import { splitDocs } from "./doc-links.js";
 import { phaseChipLabel, splitReports } from "./report-links.js";
 import { readLinks } from "./ListEditors";
 import { resolveImageSrc } from "@/features/attachments/images";
@@ -194,6 +195,7 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
   const pendingStatus =
     effective?.committed !== undefined && effective.committed.status !== effective.status ? effective.status : null;
   const reportGroups = splitReports(item);
+  const docGroups = splitDocs(item);
   const viewer = useReportViewer(item);
   useEffect(() => {
     if (item.display !== undefined) publishDisplay(repoId, readDisplay(item.display));
@@ -219,7 +221,8 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
         />
       </section>
       <ExternalLinks links={item.links} />
-      <ReportsSection reports={reportGroups.initiative} onOpen={viewer.openReport} />
+      <DocumentsSection docs={docGroups.initiative} onOpen={viewer.openDoc} />
+      <ReportsSection reports={reportGroups.initiative} onOpen={viewer.openDoc} />
       <ReportDialog
         item={item}
         repoId={repoId}
@@ -263,6 +266,11 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
                       <td className="py-2 pr-3">
                         <span className="text-muted-foreground">{phase.id}. </span>
                         {phase.title}
+                        <PhaseDocChips
+                          phase={phase.id}
+                          docs={docGroups.byPhase.get(phase.id) ?? []}
+                          onOpen={viewer.openDoc}
+                        />
                         {phaseReports.length > 0 ? (
                           <span className="mt-1 flex flex-wrap gap-1" data-testid={`phase-reports-${phase.id}`}>
                             {phaseReports.map((report) => (
@@ -270,7 +278,7 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
                                 key={report.name}
                                 report={report}
                                 label={phaseChipLabel(report.name)}
-                                onOpen={viewer.openReport}
+                                onOpen={viewer.openDoc}
                               />
                             ))}
                           </span>

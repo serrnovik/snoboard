@@ -66,6 +66,21 @@ test("README screenshots", async ({ page }) => {
   await expect(report.getByRole("heading", { name: "Phase 1: Metering" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(report).toBeHidden();
+
+  // Document viewer: the roadmap, then its link to the phase 1 packet and on to a task file.
+  await expect(details.getByTestId("phase-docs-1")).toBeVisible();
+  await details.getByTestId("doc-open-ROADMAP").click();
+  const viewer = page.getByTestId("report-dialog");
+  await expect(viewer.getByRole("heading", { name: "Billing roadmap" })).toBeVisible();
+  await expect(viewer.getByTestId("doc-nav")).toBeVisible();
+  await viewer.getByRole("link", { name: "phase 1 packet" }).click();
+  await expect(viewer.getByRole("heading", { name: "Phase 1 packet: Metering" })).toBeVisible();
+  await expect(viewer.getByTestId("doc-nav-phases/phase-1.packet")).toHaveAttribute("aria-current", "page");
+  await shot(page, "docs.png");
+  await viewer.getByRole("link", { name: "T1.1 Seat counter" }).click();
+  await expect(viewer.getByRole("heading", { name: "T1.1 Seat counter" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
   await page.keyboard.press("Escape");
 
   await page.goto("/?open=platform-002");

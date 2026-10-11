@@ -1,5 +1,6 @@
 import {
   detectImageType,
+  isDocFile,
   isReportFile,
   MAX_ATTACHMENT_BYTES,
   MAX_REPORT_BYTES,
@@ -61,6 +62,34 @@ export function lookupReport(snapshot: Snapshot, item: BoardItem, relative: stri
   const entry = item.reports?.find((report) => report.name === name);
   if (entry === undefined || !entry.formats.includes(kind)) return { ok: false };
   return { ok: true, path: `${reportsFolder(item)}/${relative}`, kind, sha };
+}
+
+/** An image anywhere in the initiative folder (`phases/img/a.png`); plain ASCII names, at most 4 segments. */
+const DOC_IMAGE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\/){0,3}[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\.(?:png|jpe?g|webp|gif)$/;
+
+/**
+ * Resolves `relative` (path below the initiative folder, with extension) for the documents
+ * endpoint. `reports/...` goes through `lookupReport`; other documents must be listed on the
+ * item (`item.docs`, built from the tree), so traversal, symlinks, the initiative file and other
+ * extensions never reach git. Images must match a strict name pattern and are answered only when
+ * their bytes are an image.
+ */
+export function lookupDocument(snapshot: Snapshot, item: BoardItem, relative: string): ReportLookup {
+  if (relative.startsWith("reports/")) return lookupReport(snapshot, item, relative.slice("reports/".length));
+  const sha = sourceSha(snapshot, item);
+  if (sha === undefined || (item.docs ?? []).length === 0) return { ok: false };
+  const folder = item.path.slice(0, item.path.lastIndexOf("/"));
+  if (DOC_IMAGE.test(relative)) {
+    if (relative.split("/").some((part) => part.includes(".."))) return { ok: false };
+    return { ok: true, path: `${folder}/${relative}`, kind: "image", sha };
+  }
+  if (!isDocFile(relative)) return { ok: false };
+  const match = /^(.+)\.(md|html)$/.exec(relative);
+  if (match === null) return { ok: false };
+  const kind = match[2] as "md" | "html";
+  const entry = item.docs?.find((doc) => doc.path === match[1]);
+  if (entry === undefined || !entry.formats.includes(kind)) return { ok: false };
+  return { ok: true, path: `${folder}/${relative}`, kind, sha };
 }
 
 export function reportNotFound(): Response {

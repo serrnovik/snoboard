@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { spawn } from "node:child_process";
+import { isDocFile } from "./documents.js";
 
 /**
  * Fields the reader needs from repository config.
@@ -274,7 +275,15 @@ export interface InitiativeTree {
   files: InitiativeFile[];
   /** Initiative folder -> report paths relative to its `reports/` folder (regular files only, sorted). */
   reports: Map<string, string[]>;
+  /**
+   * Initiative folder -> document paths relative to it (regular `.md` / `.html` files, at most
+   * `MAX_DOC_DEPTH` deep, outside `reports/`, the initiative file itself excluded; sorted).
+   */
+  docs: Map<string, string[]>;
 }
+
+/** Raw document files kept per folder before grouping; bounds memory on huge trees. */
+const MAX_RAW_DOC_FILES = 1000;
 
 /**
  * One `ls-tree` walk (trees only, no blobs) that finds initiative files and the
@@ -295,6 +304,7 @@ export async function listInitiativeTree(
   const result = await git(repoDir, args, options);
   const files: InitiativeFile[] = [];
   const reports = new Map<string, string[]>();
+  const docs = new Map<string, string[]>();
   for (const record of result.stdout.toString("utf8").split("\0")) {
     if (record.length === 0) {
       continue;
@@ -316,7 +326,15 @@ export async function listInitiativeTree(
     // Reports: regular blobs only (symlinks are 120000, submodules are commits).
     if (type !== "blob" || (mode !== "100644" && mode !== "100755")) continue;
     const parts = filePath.split("/");
-    if (parts[rootDepth + 2] !== "reports") continue;
+    if (parts[rootDepth + 2] !== "reports") {
+      const relative = parts.slice(rootDepth + 2).join("/");
+      if (parts.length < rootDepth + 3 || !isDocFile(relative)) continue;
+      const folder = parts.slice(0, rootDepth + 2).join("/");
+      const list = docs.get(folder) ?? [];
+      if (list.length < MAX_RAW_DOC_FILES) list.push(relative);
+      docs.set(folder, list);
+      continue;
+    }
     if (parts.length !== rootDepth + 4 && parts.length !== rootDepth + 5) continue;
     if (!isReportFile(parts.slice(rootDepth + 3).join("/"))) continue;
     const folder = parts.slice(0, rootDepth + 2).join("/");
@@ -326,7 +344,8 @@ export async function listInitiativeTree(
   }
   files.sort((left, right) => compareName(left.path, right.path));
   for (const list of reports.values()) list.sort(compareName);
-  return { files, reports };
+  for (const list of docs.values()) list.sort(compareName);
+  return { files, reports, docs };
 }
 
 const REPORT_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;

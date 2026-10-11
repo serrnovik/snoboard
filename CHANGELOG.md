@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Show phase and initiative documents: phase packets (`phases/phase-<n>.packet.md`, `phase-<n>a`, `phase-<n>.<m>`,
+  `phase-<n>-<slug>`, `phases/NN-<slug>.md`), task files (`phases/phase-<n>/T<n>.<m>-<slug>.md`) and other `.md` /
+  `.html` files of the initiative folder (`ROADMAP.md`, `CONVENTIONS.md`, `phases/README.md`). The snapshot lists them
+  from the git tree (no blob reads, at most 300 per initiative, three levels deep) as `docs` with kind, phase and
+  title; cards show "N docs", phase rows get packet chips and an expandable "N tasks", and a **Documents** section
+  lists the rest. The report viewer became a document viewer with a navigation tree (Initiative / Phase N / Reports),
+  relative links between documents, `#anchor` scrolling and **Open on GitHub**. New endpoint
+  `GET /api/repos/<repo>/initiatives/<id>/docs/<path>` (honours `?ref=`); `.../reports/<file>` keeps working.
 - Switch the board to one branch. A branch chip in the header opens a searchable picker (type to filter, arrow keys,
   Enter, Escape; matches highlighted) listing the remote branches newest commit first, with short sha, date and age.
   **All branches (merged)** stays the default; the default branch is an explicit choice. A branch view is the snapshot
