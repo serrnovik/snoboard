@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Agent bridge (optional, `SNOBOARD_AGENT_BRIDGE=true`): personal MCP tokens (Settings → Agent access, stored as
+  SHA-256 hashes) and a Streamable HTTP MCP endpoint at `/mcp` with `list_repos`, `list_branches`, `list_initiatives`,
+  `get_initiative`, `list_docs`, `read_doc`, `get_basket`, `propose_edits`, `set_doc_from_local`, `list_proposals` and
+  `notify_pushed`. Proposals are validated like `/edits/validate` (the server fills `from` / `fromHash`) and wait in a
+  header inbox (**N proposals**) with per-edit diffs, Accept (into the basket), Reject and Accept all; matching
+  proposals also show inline in the details panel and the document viewer. Baskets sync to the server per person,
+  repository and branch (`localStorage` stays the offline cache; three-way merge by edit key). `GET /api/events`
+  pushes proposal, basket and snapshot events so boards reload after a push. **Copy prompt for agent** on
+  initiatives, phase rows and the basket. State lives in `<SNOBOARD_STATE_DIR>/snoboard.db` (`node:sqlite`, WAL,
+  `0600`); the Helm chart gains an optional `persistence` block. See `docs/agent-bridge.md`.
 - Render ```` ```mermaid ```` blocks as diagrams in the document viewer, the markdown editor preview and the details
   panel. Mermaid (`mermaid` 12.1.0, board only) is imported lazily the first time a diagram is on the page, so the main
   bundle stays the same size (+1.4 KB gzip for the code-block handling) and the server bundle never references it;

@@ -53,6 +53,9 @@ env:
   # github mode only: login asks for the write scope up front and keeps that token as the write token
   # (one consent, no separate connect). Everyone who signs in hands over a write token.
   # SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE: "true"
+  # Agent bridge (docs/agent-bridge.md): personal MCP tokens, proposal inbox, synced baskets.
+  # Needs github or cloudflare-access sign-in; enable persistence below so the state survives.
+  # SNOBOARD_AGENT_BRIDGE: "true"
 
 # Name of a Secret to mount as files. Leave empty to skip the mount.
 # The Secret must contain every key listed in secretFiles.
@@ -94,6 +97,21 @@ extraSecretMounts: []
 # - name: acme-secrets
 #   secretName: snoboard-acme
 #   mountPath: /var/run/secrets/acme
+
+# Persistent state for the agent bridge (env SNOBOARD_AGENT_BRIDGE: "true"; docs/agent-bridge.md):
+# personal MCP token hashes, synced baskets and proposals in <mountPath>/snoboard.db.
+# The clone stays on the dataDir emptyDir. Enabling this also switches the Deployment to Recreate.
+persistence:
+  enabled: false
+  # Use an existing claim instead of creating one.
+  existingClaim: ""
+  # Empty uses the cluster's default StorageClass.
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  # Exported as SNOBOARD_STATE_DIR.
+  mountPath: /var/lib/snoboard-state
 
 # requests: 100m CPU / 128Mi memory. memory limit: 256Mi.
 resources:

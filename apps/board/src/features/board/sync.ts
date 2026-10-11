@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isBoardPayload, type BoardPayload, type BoardStatus } from "@/features/board/model";
 import { useRepoId } from "@/features/repo/context";
 import { DEFAULT_REPO_ID } from "@/features/basket/store";
-import { repoApi } from "@/lib/routes";
+import { onBoardSnapshot } from "@/features/agent/bridge";
+import { activeRef, repoApi } from "@/lib/routes";
 
 export const CLOCK_TICK_MS = 30_000;
 export const REFRESH_POLL_MS = 1_000;
@@ -269,6 +270,17 @@ export function useBoardResource(options?: {
       window.clearTimeout(warmup);
     };
   }, [pollIntervalMs, reloadToken, commit, noteFailure, repoId]);
+
+  // Agent bridge: reload as soon as the server has a new snapshot of what this board shows.
+  useEffect(
+    () =>
+      onBoardSnapshot((repo, ref) => {
+        if (repo !== repoId) return;
+        const shown = activeRef(repoId);
+        if (ref === null || ref === shown) setReloadToken((token) => token + 1);
+      }),
+    [repoId],
+  );
 
   useEffect(() => () => refreshAbort.current?.abort(), []);
 

@@ -93,3 +93,25 @@ compromised. `SNOBOARD_GITHUB_LOGIN_REQUESTS_WRITE=true` makes every GitHub sign
 classic OAuth `repo` grant covers every repository the person can write to; Snoboard only calls the configured one.
 Two people creating an initiative in the same project at the same moment in `pr` mode can be given the same number on
 different branches; review catches it at merge.
+
+### Agent bridge (`SNOBOARD_AGENT_BRIDGE=true`)
+
+Off by default. Assets: each person's personal MCP tokens, their basket and proposals (`snoboard.db`), and the
+repository (only through the normal submit path). The agent and its machine are the person's own; the board trusts
+nothing an agent sends. See `docs/agent-bridge.md`.
+
+| Threat | Control |
+| --- | --- |
+| Token theft from the server | Tokens are 32 random bytes (`sbp_` + base64url), shown once at creation; the database keeps only their SHA-256 hash (looked up by hash, compared in constant time). The database file and its WAL files are `0600` in `SNOBOARD_STATE_DIR`. Tokens never appear in logs, list responses or events. |
+| Using a token after it leaked | Revoke in Settings → Agent access (immediate). Tokens can be limited to some repositories; every tool checks the scope before touching a repository. 20 live tokens per person. |
+| Browser-borne requests to `/mcp` (CSRF, DNS rebinding) | `/mcp` accepts only `Authorization: Bearer` tokens, never cookies, and refuses any request with an `Origin` header unless it is listed in `SNOBOARD_AGENT_BRIDGE_ALLOWED_ORIGINS` (agents send none). |
+| Cross-site writes to the browser routes | Token management, basket sync and inbox decisions use the board session, the same `Origin`/`Referer` check as submit, and a CSRF token bound to the session or Access identity. |
+| Reading or changing another person's data | Every query is keyed by the person (`github:<login>`, `email:<access email>`, or the one opt-in shared password user); proposals, baskets and tokens of others answer `404`. The event stream sends per-person events only to that person's connections; snapshot events carry only a repository id and ref. Password-only boards refuse the bridge unless `SNOBOARD_AGENT_BRIDGE_PASSWORD_USER=shared`; `none` mode always refuses it. |
+| An agent writing to git | No tool commits or pushes. Proposals are validated with the same rules as `/edits/validate` (paths, schema, stale checks, `.snoboard.yml` values) and only enter the basket when the person accepts them; the person's own submit then goes through every write-path control above (CSRF, credentials, branch allowlist, re-validation at the branch head). Images cannot be proposed. |
+| Malicious proposal content | Edits are parsed with the edit schema on the way in and again on the way out; the inbox shows values as text (React escapes them) and document diffs as plain text lines, never rendered HTML. |
+| Abuse and resource use | 120 MCP requests per token per minute, 60 proposals per token per hour, 50 edits and 192 KiB per proposal, 200 pending proposals per person, `/mcp` body 256 KiB, tool results 256 KiB, synced baskets 512 KiB, `notify_pushed` once per 30 s per token, repository and branch (on top of the board's own fetch lock), 10 event streams per person and 200 per server. Decided proposals are pruned after 30 days. |
+| Repudiation | One info log line per MCP call (outcome, reason, tool, person, token id, repository, duration) and per token creation and revocation; never a token, edit text or document content. Proposals record the token name that made them. |
+
+Known limits: the bridge state lives in one SQLite file in one process; run one replica. Anyone who can read the
+database file can see baskets and proposals (not tokens). A person's agent acts with that person's board access:
+it can read every initiative of the repositories its token allows.

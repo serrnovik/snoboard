@@ -6,6 +6,11 @@ metadata:
     {{- include "snoboard.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  # A ReadWriteOnce volume cannot be mounted by the old and the new pod at once.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "snoboard.selectorLabels" . | nindent 6 }}
@@ -46,6 +51,10 @@ spec:
               value: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
             - name: SNOBOARD_DATA_DIR
               value: {{ .Values.dataDir | quote }}
+            {{- if .Values.persistence.enabled }}
+            - name: SNOBOARD_STATE_DIR
+              value: {{ .Values.persistence.mountPath | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             {{- if ne (toString $value) "" }}
             - name: {{ $key }}
@@ -91,6 +100,10 @@ spec:
               mountPath: {{ .Values.dataDir | quote }}
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.persistence.enabled }}
+            - name: state
+              mountPath: {{ .Values.persistence.mountPath | quote }}
+            {{- end }}
             {{- if .Values.existingSecret }}
             - name: secrets
               mountPath: {{ .Values.secretMountPath | quote }}
@@ -111,6 +124,11 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.persistence.enabled }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-state" (include "snoboard.fullname" .)) | quote }}
+        {{- end }}
         {{- if .Values.existingSecret }}
         - name: secrets
           secret:

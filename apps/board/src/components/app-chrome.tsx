@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { usePageContext } from "vike-react/usePageContext";
 import { BoardNav } from "@/components/nav";
+import { AgentHeader } from "@/features/agent/AgentHeader";
 import { PageActionsProvider } from "@/components/page-actions";
 import { RepoSwitcherBar } from "@/components/repo-switcher";
 import { SessionActions } from "@/components/session-actions";
@@ -30,6 +31,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
           <div className="hidden flex-1 sm:block" />
           <div className="flex min-h-12 shrink-0 items-center gap-2 sm:min-h-0">
             <div ref={setPageActions} className="flex items-center gap-2 empty:hidden" />
+            {pathname === "/login" || pathname === "/login/" ? null : <AgentHeader repoId={repoId} />}
             <ThemeToggle />
             <SessionActions />
           </div>

@@ -30,6 +30,9 @@ The image includes `git` and `openssh-client`, runs as uid/gid 10001, and does n
 | `SNOBOARD_ALLOWED_GITHUB_ORGS` | no | Comma-separated GitHub organizations |
 | `SNOBOARD_GITHUB_TOKEN_FILE` | no | Path to a read-only token for pull request and check status |
 | `SNOBOARD_BOT_AUTHORS` | no | Comma list of extra bot name/email substrings, merged with the built-in list (`[bot]`, `claude`, `codex`, `woodpecker ci`, ...), left out of an initiative's creator and participants |
+| `SNOBOARD_AGENT_BRIDGE` | no | `true` turns on the agent bridge (MCP endpoint, proposal inbox, synced baskets). See [agent-bridge.md](agent-bridge.md) |
+| `SNOBOARD_STATE_DIR` | with the agent bridge | Directory of `snoboard.db`. Default `SNOBOARD_DATA_DIR`. Put it on a persistent volume (chart: `persistence`) |
+| `SNOBOARD_AGENT_BRIDGE_PASSWORD_USER` / `_MCP_URL` / `_ALLOWED_ORIGINS` | no | Shared password user, MCP URL shown to agents, browser origins allowed on `/mcp`. See [agent-bridge.md](agent-bridge.md#turning-it-on) |
 | `PORT` | no | HTTP port. Default 8080 |
 
 Every `*_FILE` variable is a path. The file contents are the secret. Do not put secrets in the other variables or in the image.
@@ -109,6 +112,11 @@ Install with the example overlay, which sets `existingSecret` and a repository U
 helm install snoboard deploy/helm/snoboard \
   -f deploy/helm/snoboard/values-existing-secret.example.yaml
 ```
+
+For the [agent bridge](agent-bridge.md), set `env.SNOBOARD_AGENT_BRIDGE: "true"` and `persistence.enabled: true`. The
+chart then creates a `ReadWriteOnce` claim (`persistence.size`, default 1Gi, kept on uninstall; or mount
+`persistence.existingClaim`), mounts it at `persistence.mountPath` (exported as `SNOBOARD_STATE_DIR`) and switches the
+Deployment to `Recreate`. The clone stays on the `emptyDir`. Keep `replicaCount: 1`.
 
 Ingress is off by default. Set `ingress.enabled`, `ingress.className`, `ingress.hosts`, and `ingress.annotations` to publish the Service. `ingress.hosts[].host` is the hostname. Each entry's `paths` list has `path` and `pathType`.
 

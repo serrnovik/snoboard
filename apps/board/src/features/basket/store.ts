@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { EditSchema, type Edit } from "snoboard/browser";
+import { EditSchema, isNoOpEdit, mergeIntoBasket, sameEditTarget, withFirstFrom, type Edit } from "snoboard/browser";
 import { deleteImage } from "@/features/attachments/store";
 import { useBasketBranch } from "@/features/repo/branch-context";
 
@@ -38,6 +38,51 @@ export function savedBasketCount(repoId: string, branch: string, isDefault = fal
 
 export function resetBasketStore(): void {
   cache.clear();
+  syncHooks = null;
+  for (const listener of listeners) listener();
+}
+
+/**
+ * Server-side basket sync (agent bridge). `onOpen` runs when a basket is shown, `onWrite` after
+ * every local change. Without hooks the basket lives in localStorage only.
+ */
+export type BasketSyncHooks = {
+  onOpen: (repoId: string, branch: string) => void;
+  onWrite: (repoId: string, branch: string, edits: readonly Edit[]) => void;
+};
+
+let syncHooks: BasketSyncHooks | null = null;
+
+/** Baskets on screen (`repo:branch` -> mounted users; repo ids have no colon), so hooks set later still open them. */
+const openBaskets = new Map<string, number>();
+
+export function setBasketSyncHooks(hooks: BasketSyncHooks | null): void {
+  syncHooks = hooks;
+  if (hooks === null) return;
+  for (const scope of openBaskets.keys()) {
+    const colon = scope.indexOf(":");
+    hooks.onOpen(scope.slice(0, colon), scope.slice(colon + 1));
+  }
+}
+
+/** The saved basket for a repository and branch (the cache, else localStorage). */
+export function readSavedBasket(repoId: string, branch: string): readonly Edit[] {
+  if (typeof window === "undefined") return EMPTY;
+  return current(scopeOf(repoId, branch, false));
+}
+
+/** Replace a basket with the server's version. Does not call `onWrite` back. */
+export function replaceSavedBasket(repoId: string, branch: string, edits: readonly Edit[]): void {
+  if (typeof window === "undefined") return;
+  const key = basketStorageKey(repoId, branch);
+  const parsed = edits.flatMap((edit) => {
+    const result = EditSchema.safeParse(edit);
+    return result.success ? [result.data] : [];
+  });
+  if (sameEdits(cache.get(key) ?? readBasket(scopeOf(repoId, branch, false)), parsed)) return;
+  const stored = parsed.length === 0 ? EMPTY : parsed;
+  cache.set(key, stored);
+  writeBasket(key, stored);
   for (const listener of listeners) listener();
 }
 
@@ -72,7 +117,13 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
       listener();
     };
     window.addEventListener("storage", onStorage);
+    const openKey = `${repoId}:${branch}`;
+    openBaskets.set(openKey, (openBaskets.get(openKey) ?? 0) + 1);
+    syncHooks?.onOpen(repoId, branch);
     return () => {
+      const left = (openBaskets.get(openKey) ?? 1) - 1;
+      if (left <= 0) openBaskets.delete(openKey);
+      else openBaskets.set(openKey, left);
       listeners.delete(listener);
       window.removeEventListener("storage", onStorage);
     };
@@ -86,8 +137,9 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
       cache.set(key, stored);
       writeBasket(key, stored);
       for (const listener of listeners) listener();
+      syncHooks?.onWrite(repoId, branch, stored);
     },
-    [key],
+    [key, repoId, branch],
   );
   const read = useCallback(() => readClient(scopeOf(repoId, branch, isDefault)), [repoId, branch, isDefault]);
 
@@ -95,7 +147,7 @@ export function useBasket(repoId: string = DEFAULT_REPO_ID): {
     (edit: Edit) => {
       const parsed = EditSchema.safeParse(edit);
       if (!parsed.success) return;
-      publish(mergeInto(read(), parsed.data));
+      publish(mergeIntoBasket(read(), parsed.data));
     },
     [publish, read],
   );
@@ -276,7 +328,7 @@ function applyStatusColumns(
       if (column === from) {
         next = next.filter((edit) => !(edit.kind === "setStatus" && edit.id === item.id));
       } else {
-        next = mergeInto(next, { kind: "setStatus", id: item.id, from, to: column });
+        next = mergeIntoBasket(next, { kind: "setStatus", id: item.id, from, to: column });
       }
     }
   }
@@ -292,101 +344,16 @@ export function insertEditsBefore(edits: readonly Edit[], index: number, added: 
     const parsed = EditSchema.safeParse(raw);
     if (!parsed.success) continue;
     let edit = parsed.data;
-    const existing = next.findIndex((entry) => sameTarget(entry, edit));
+    const existing = next.findIndex((entry) => sameEditTarget(entry, edit));
     if (existing !== -1) {
       edit = withFirstFrom(next[existing]!, edit);
       next = next.filter((_, entryIndex) => entryIndex !== existing);
       if (existing < at) at -= 1;
     }
-    if (!isNoOp(edit)) inserted.push(edit);
+    if (!isNoOpEdit(edit)) inserted.push(edit);
   }
   next.splice(at, 0, ...inserted);
   return next;
-}
-
-function mergeInto(edits: readonly Edit[], next: Edit): Edit[] {
-  if (next.kind === "createInitiative") return [...edits, next];
-  if (next.kind === "addAttachment") {
-    const same = edits.some((edit) => edit.kind === "addAttachment" && edit.id === next.id && edit.path === next.path);
-    return same ? [...edits] : [...edits, next];
-  }
-  const index = edits.findIndex((edit) => sameTarget(edit, next));
-  if (index === -1) {
-    if (isNoOp(next)) return [...edits];
-    return [...edits, next];
-  }
-  const merged = withFirstFrom(edits[index]!, next);
-  if (isNoOp(merged)) return edits.filter((_, entryIndex) => entryIndex !== index);
-  const copy = [...edits];
-  copy[index] = merged;
-  return copy;
-}
-
-function sameTarget(left: Edit, right: Edit): boolean {
-  if (left.kind === "createInitiative" || right.kind === "createInitiative") return false;
-  if (left.kind === "addAttachment" || right.kind === "addAttachment") return false;
-  if (isDocEdit(left) || isDocEdit(right)) {
-    // A document created in this basket stays a createDoc when it is edited again.
-    return isDocEdit(left) && isDocEdit(right) && left.id === right.id && left.path === right.path;
-  }
-  if (left.kind !== right.kind || left.id !== right.id) return false;
-  if (left.kind === "setPhaseStatus" && right.kind === "setPhaseStatus") return left.phase === right.phase;
-  return true;
-}
-
-function withFirstFrom(existing: Edit, next: Edit): Edit {
-  switch (existing.kind) {
-    case "setBody":
-      return next.kind === "setBody" ? { ...next, fromHash: existing.fromHash } : next;
-    case "setDoc":
-      return next.kind === "setDoc" ? { ...next, fromHash: existing.fromHash } : next;
-    case "createDoc":
-      return isDocEdit(next) ? { kind: "createDoc", id: existing.id, path: existing.path, to: next.to } : next;
-    case "setLabels":
-      return next.kind === "setLabels" ? { ...next, from: existing.from } : next;
-    case "setIssues":
-      return next.kind === "setIssues" ? { ...next, from: existing.from } : next;
-    case "setLinks":
-      return next.kind === "setLinks" ? { ...next, from: existing.from } : next;
-    case "setStatus":
-      return next.kind === "setStatus" ? { ...next, from: existing.from } : next;
-    case "setPriority":
-      return next.kind === "setPriority" ? { ...next, from: existing.from } : next;
-    case "setTitle":
-      return next.kind === "setTitle" ? { ...next, from: existing.from } : next;
-    case "setIcon":
-      return next.kind === "setIcon" ? { ...next, from: existing.from } : next;
-    case "setPhaseStatus":
-      return next.kind === "setPhaseStatus" ? { ...next, from: existing.from } : next;
-    case "createInitiative":
-    case "addAttachment":
-      return next;
-  }
-}
-
-function isNoOp(edit: Edit): boolean {
-  switch (edit.kind) {
-    case "setBody":
-    case "setDoc":
-    case "createDoc":
-    case "createInitiative":
-    case "addAttachment":
-      return false;
-    case "setLabels":
-    case "setIssues":
-      return sameStrings(edit.from, edit.to);
-    case "setLinks":
-      return (
-        edit.from.length === edit.to.length &&
-        edit.from.every((link, index) => link.title === edit.to[index]?.title && link.url === edit.to[index]?.url)
-      );
-    case "setStatus":
-    case "setPriority":
-    case "setTitle":
-    case "setIcon":
-    case "setPhaseStatus":
-      return edit.from === edit.to;
-  }
 }
 
 type DocEdit = Extract<Edit, { kind: "setDoc" | "createDoc" }>;
@@ -406,10 +373,6 @@ export function pendingDocs(edits: readonly Edit[], id: string): Map<string, { t
     map.set(edit.path, { text: edit.to, created: edit.kind === "createDoc" });
   }
   return map;
-}
-
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((label, index) => label === right[index]);
 }
 
 function formatLabelList(labels: readonly string[]): string {

@@ -3,6 +3,7 @@ import { EditLabel } from "@/features/basket/EditLabel";
 import { SubmitDialog } from "@/features/basket/SubmitDialog";
 import { DEFAULT_REPO_ID, describeEdit, useBasket } from "@/features/basket/store";
 import { useValidationErrors } from "@/features/basket/validation";
+import { CopyPromptButton } from "@/features/agent/CopyPromptButton";
 import { CircleAlert } from "lucide-react";
 
 export function BasketPanel({
@@ -78,10 +79,17 @@ export function BasketPanel({
         </ul>
       )}
       {basket.edits.length > 0 ? (
-        <div>
+        <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => basket.clear()}>
             Clear
           </Button>
+          <CopyPromptButton
+            testId="copy-agent-prompt-basket"
+            target={{
+              repoId: repoId ?? DEFAULT_REPO_ID,
+              basket: { count: basket.edits.length, lines: basket.edits.map((edit) => describeEdit(edit, titles)) },
+            }}
+          />
         </div>
       ) : null}
       {canSubmit ? (

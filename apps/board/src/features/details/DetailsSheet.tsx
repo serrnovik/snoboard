@@ -1,5 +1,5 @@
 import { ArrowLeft, ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BoardItem, InitiativePeople } from "snoboard/browser";
 import { redirectToLogin } from "@/features/board/sync";
 import {
@@ -29,6 +29,9 @@ import { formatQualifiedId, initiativeDetailsPath, parseQualifiedId, shareUrl } 
 import { boardPath, repoApi } from "@/lib/routes";
 import { PanelResizeHandle, usePanelWidth } from "./panel-width";
 import { ItemIcon, LabelChip, publishDisplay, readDisplay } from "@/features/icons/display";
+import { CopyPromptButton } from "@/features/agent/CopyPromptButton";
+import { InitiativeProposals } from "@/features/agent/ProposalNotice";
+import { onBoardSnapshot } from "@/features/agent/bridge";
 
 export type PullEnrichment = {
   state: string;
@@ -212,6 +215,12 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
           ))}
         </ul>
       ) : null}
+      <div className="flex flex-wrap gap-2 empty:hidden">
+        <CopyPromptButton
+          target={{ repoId, initiative: { id: item.id, title: item.title, path: item.path, status: item.status } }}
+        />
+      </div>
+      <InitiativeProposals repoId={repoId} id={item.id} />
       <EditControls item={item} />
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">Summary</h2>
@@ -266,6 +275,17 @@ function InitiativeContent({ item, variant }: { item: InitiativeDetails; variant
                       <td className="py-2 pr-3">
                         <span className="text-muted-foreground">{phase.id}. </span>
                         {phase.title}
+                        <CopyPromptButton
+                          compact
+                          className="ml-1 align-middle"
+                          testId={`copy-agent-prompt-phase-${phase.id}`}
+                          label={`Copy prompt for agent: phase ${phase.id}`}
+                          target={{
+                            repoId,
+                            initiative: { id: item.id, title: item.title, path: item.path, status: item.status },
+                            phase: { id: phase.id, title: phase.title, status: phase.status },
+                          }}
+                        />
                         <PhaseDocChips
                           phase={phase.id}
                           docs={docGroups.byPhase.get(phase.id) ?? []}
@@ -492,10 +512,16 @@ function DependencyLink({ id, variant }: { id: string; variant: "sheet" | "page"
 function useInitiative(id: string): LoadState {
   const repoId = useRepoId();
   const [state, setState] = useState<LoadState>({ phase: "loading", data: null, message: null });
+  // Agent bridge: a new snapshot of this repository reloads the open initiative in place.
+  const [version, setVersion] = useState(0);
+  const shown = useRef<string | null>(null);
+  useEffect(() => onBoardSnapshot((repo) => (repo === repoId ? setVersion((value) => value + 1) : undefined)), [repoId]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ phase: "loading", data: null, message: null });
+    const target = `${repoId}:${id}`;
+    if (shown.current !== target) setState({ phase: "loading", data: null, message: null });
+    shown.current = target;
     void fetch(repoApi(repoId, `/initiatives/${encodeURIComponent(id)}`), {
       credentials: "same-origin",
       signal: controller.signal,
@@ -523,7 +549,7 @@ function useInitiative(id: string): LoadState {
         });
       });
     return () => controller.abort();
-  }, [id, repoId]);
+  }, [id, repoId, version]);
 
   return state;
 }

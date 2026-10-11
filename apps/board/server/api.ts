@@ -101,7 +101,7 @@ function allowRefresh(repoId: string, session: string, now: number): boolean {
   return true;
 }
 
-function isKnownRepo(id: string): boolean {
+export function isKnownRepo(id: string): boolean {
   if (!REPO_ID.test(id)) return false;
   const repos = listActiveRepos();
   if (repos.length === 0) return id === DEFAULT_REPO_ID;
@@ -236,7 +236,7 @@ function notReadyJson(c: Context<BoardEnv>, repoId: string) {
   return c.json({ error: `repository sync failed: ${status.lastError}`, code: "sync_failed", status }, 503);
 }
 
-type BoardView =
+export type BoardView =
   | { ok: true; snapshot: Snapshot | null; ref?: string; cacheId: string }
   | { ok: false; status: 400 | 404 | 502 | 503; code: string; error: string };
 
@@ -244,11 +244,12 @@ type BoardView =
  * The snapshot a request reads: the merged view, or with `?ref=<branch>` that branch alone.
  * The name is untrusted: it must be a valid branch name and exist on the remote.
  */
-async function resolveView(
-  c: Context<BoardEnv>,
-  repoId: string,
-  raw: string | undefined = c.req.query("ref"),
-): Promise<BoardView> {
+function resolveView(c: Context<BoardEnv>, repoId: string, raw: string | undefined = c.req.query("ref")): Promise<BoardView> {
+  return resolveRefView(repoId, raw);
+}
+
+/** `resolveView` without a request: the merged snapshot, or one branch alone. */
+export async function resolveRefView(repoId: string, raw: string | undefined): Promise<BoardView> {
   if (raw === undefined || raw.length === 0) return { ok: true, snapshot: getSnapshot(repoId), cacheId: repoId };
   if (!isValidBranchName(raw)) return { ok: false, status: 400, code: "invalid_branch", error: "invalid branch name" };
   const source = branchSource(repoId);
@@ -582,7 +583,7 @@ async function initiativeJson(c: Context<BoardEnv>, repoId: string) {
 }
 
 /** Body text is everything after the closing frontmatter fence, matching core `bodyHash`. */
-function initiativeBody(text: string): string | null {
+export function initiativeBody(text: string): string | null {
   const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const match = /^(---)(\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))([\s\S]*)$/.exec(source);
   if (match === null) return null;
@@ -1003,7 +1004,7 @@ function parseValidateBody(raw: string): unknown[] | "invalid-json" | "invalid" 
   return edits;
 }
 
-function readerFor(repoDir: string | undefined, config: Config): ReadBlob {
+export function readerFor(repoDir: string | undefined, config: Config): ReadBlob {
   if (repoDir === undefined) return async () => undefined;
   const cache = new Map<string, Promise<Map<string, BlobContent>>>();
   return async (ref, filePath) => {
@@ -1028,7 +1029,7 @@ export function gitBlobSha(bytes: Uint8Array): string {
     .digest("hex");
 }
 
-function utcToday(now = new Date()): string {
+export function utcToday(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 

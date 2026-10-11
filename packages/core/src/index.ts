@@ -142,6 +142,7 @@ export {
   type NewInitiativeInput,
 } from "./edits.js";
 export { MAX_DOC_EDIT_LENGTH } from "./edit-schema.js";
+export { diffBaskets, editKey, isNoOpEdit, mergeBaskets, mergeIntoBasket, sameEditTarget, withFirstFrom, type BasketChange } from "./basket.js";
 export { commitsUnder, MAX_ROOT_COMMITS, type CommitWithFiles, type FileChange } from "./git-commits.js";
 export {
   botPatterns,

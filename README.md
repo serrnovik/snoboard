@@ -132,6 +132,13 @@ The basket panel also marks the failing rows.
 
 See [docs/auth.md](docs/auth.md) and [docs/editing.md](docs/editing.md).
 
+### Agent bridge (optional)
+
+Connect your own coding agent (Claude Code, Codex, any MCP client) to the board with a personal token: it reads
+initiatives and documents, proposes edits that land in your inbox with a diff, or pushes commits and asks the board to
+refresh. Baskets sync across your devices, and open boards update live. The board never calls a language model. Off
+unless `SNOBOARD_AGENT_BRIDGE=true`; see [docs/agent-bridge.md](docs/agent-bridge.md).
+
 ### Multiple repositories
 
 One board can serve several repositories, listed in a repos file (`SNOBOARD_REPOS_FILE`, see [`examples/repos.example.yaml`](examples/repos.example.yaml)). A `Repository` switcher appears in the header. Each repository has its own URL (`/r/<id>/`), basket, edit settings and issue trackers.
@@ -209,5 +216,6 @@ The chart runs as a non-root user with a read-only root filesystem and health an
 | Sign-in modes and write tokens | [docs/auth.md](docs/auth.md) |
 | Edit modes, images, bot token, submit flow, limits | [docs/editing.md](docs/editing.md) |
 | Initiative and phase reports, the report viewer | [docs/configuration.md](docs/configuration.md#reports) |
+| Agent bridge: MCP for local agents, proposal inbox, synced baskets | [docs/agent-bridge.md](docs/agent-bridge.md) |
 | Environment variables, Docker, Helm, health checks | [docs/deploy.md](docs/deploy.md) |
 | Reporting vulnerabilities, threat model for the write path | [SECURITY.md](SECURITY.md) |

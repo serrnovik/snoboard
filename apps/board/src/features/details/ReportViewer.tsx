@@ -8,6 +8,7 @@ import { ReportMarkdown } from "@/components/report-markdown";
 import { useImageAttachments, type EditorImages } from "@/features/attachments/images";
 import { useEditConfig } from "@/features/basket/edit-config";
 import { pendingDocs, useBasket } from "@/features/basket/store";
+import { DocProposals } from "@/features/agent/ProposalNotice";
 import { redirectToLogin } from "@/features/board/sync";
 import { useRepoId } from "@/features/repo/context";
 import type { ForgeLinkConfig } from "./links.js";
@@ -332,6 +333,7 @@ function ViewerBody({
           {...(createPacket === undefined ? {} : { onCreatePacket: createPacket })}
         />
         <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3" data-testid="doc-content">
+          {!isEditing && format === "md" ? <DocProposals repoId={repoId} id={item.id} path={file} /> : null}
           {isEditing ? (
             <DocEditor
               key={doc.key}

@@ -87,3 +87,4 @@ export {
   type DocFormat,
   type DocKind,
 } from "./documents.js";
+export { diffBaskets, editKey, isNoOpEdit, mergeBaskets, mergeIntoBasket, sameEditTarget, withFirstFrom, type BasketChange } from "./basket.js";

@@ -1,4 +1,5 @@
 import type { Config, Snapshot } from "snoboard";
+import { publishSnapshot } from "./agent-bridge/events.js";
 import { resetProposals } from "./proposals.js";
 
 /** Single-repo deployments use this id when `SNOBOARD_REPOS_FILE` is unset. */
@@ -90,6 +91,14 @@ export function commitSnapshot(
       refreshing: state.status.refreshing,
     },
   });
+  // Live boards (agent bridge) reload when a fetch brings a new snapshot.
+  if (state.snapshot !== null && refsKey(state.snapshot) !== refsKey(snapshot)) {
+    publishSnapshot(repoId, null, fetchedAt);
+  }
+}
+
+function refsKey(snapshot: Snapshot): string {
+  return JSON.stringify(snapshot.refs.map((ref) => [ref.name, ref.sha]));
 }
 
 export function recordSyncError(message: string, at: string, repoId = DEFAULT_REPO_ID): void {
