@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isMap, isNode, isScalar, isSeq, parseDocument, YAMLMap as YAMLMapNode, YAMLSeq, type Document, type YAMLMap } from "yaml";
 import { z } from "zod";
-import { DEPENDENCY_ID, EditSchema, MAX_INITIATIVE_BODY_LENGTH, INITIATIVE_ID, PROJECT_NAME, SLUG_NAME, type Edit } from "./edit-schema.js";
+import { DEPENDENCY_ID, EditSchema, MAX_DOC_EDIT_LENGTH, MAX_INITIATIVE_BODY_LENGTH, INITIATIVE_ID, PROJECT_NAME, SLUG_NAME, type Edit } from "./edit-schema.js";
 import type { Config } from "./config.js";
 
 const PLAIN_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -39,7 +39,8 @@ export type NewInitiativeInput = {
   body?: string;
 };
 
-type FieldEdit = Exclude<Edit, { kind: "createInitiative" | "setBody" | "addAttachment" }>;
+type FieldEdit = Exclude<Edit, { kind: "createInitiative" | "setBody" | "addAttachment" | "setDoc" | "createDoc" }>;
+export type DocEdit = Extract<Edit, { kind: "setDoc" | "createDoc" }>;
 
 type SplitFile = {
   bom: string;
@@ -57,6 +58,38 @@ export function bodyHash(text: string): string {
   return sha256(body);
 }
 
+/** sha256 hex of a whole document file (the `fromHash` of `setDoc`). */
+export function docHash(text: string): string {
+  return sha256(text);
+}
+
+/**
+ * Applies `setDoc` / `createDoc` to the current file text (`undefined` when the file does
+ * not exist). `setDoc` needs the file, refuses files over `MAX_DOC_EDIT_LENGTH` characters,
+ * rejects a stale `fromHash`, and keeps the file's byte-order mark and line endings.
+ * `createDoc` needs the file to be missing and writes LF with a final newline.
+ */
+export function applyDocEdit(current: string | undefined, edit: DocEdit): ApplyEditResult {
+  const parsed = EditSchema.safeParse(edit);
+  if (!parsed.success) return { error: "invalid edit" };
+  const value = parsed.data;
+  if (value.kind !== "setDoc" && value.kind !== "createDoc") return { error: "not a document edit" };
+  const to = value.to.startsWith("\uFEFF") ? value.to.slice(1) : value.to;
+  if (value.kind === "createDoc") {
+    if (current !== undefined) return { error: `${value.path} already exists` };
+    const lf = normalizeNewlines(to, "\n");
+    return { text: lf.length === 0 || lf.endsWith("\n") ? lf : `${lf}\n` };
+  }
+  if (current === undefined) return { error: `${value.path} was not found` };
+  if (current.length > MAX_DOC_EDIT_LENGTH) {
+    return { error: `${value.path} is too large to edit in the board (over ${MAX_DOC_EDIT_LENGTH} characters)` };
+  }
+  if (sha256(current) !== value.fromHash) return { error: "stale" };
+  const bom = current.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const newline = current.includes("\r\n") ? "\r\n" : "\n";
+  return { text: `${bom}${normalizeNewlines(to, newline)}` };
+}
+
 export function applyEdit(text: string, edit: Edit, config: Config, today: string): ApplyEditResult {
   const parsed = EditSchema.safeParse(edit);
   if (!parsed.success) return { error: "invalid edit" };
@@ -67,6 +100,9 @@ export function applyEdit(text: string, edit: Edit, config: Config, today: strin
   }
   if (value.kind === "addAttachment") {
     return { error: "addAttachment does not change the initiative file" };
+  }
+  if (value.kind === "setDoc" || value.kind === "createDoc") {
+    return { error: `${value.kind} does not change the initiative file` };
   }
 
   const split = splitInitiative(text);
@@ -150,6 +186,10 @@ export function summarizeEdit(edit: Edit): string {
       return oneLine(`${value.id}: labels ${formatLabels(value.from)} -> ${formatLabels(value.to)}`);
     case "setBody":
       return oneLine(`${value.id}: body`);
+    case "setDoc":
+      return oneLine(`${value.id}: doc ${value.path}`);
+    case "createDoc":
+      return oneLine(`${value.id}: new doc ${value.path}`);
     case "setIssues":
       return oneLine(`${value.id}: issues ${formatLabels(value.from)} -> ${formatLabels(value.to)}`);
     case "setLinks":

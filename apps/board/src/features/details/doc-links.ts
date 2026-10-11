@@ -1,4 +1,4 @@
-import { ASSET_PATH, type BoardItem } from "snoboard/browser";
+import { ASSET_PATH, classifyDoc, type BoardItem } from "snoboard/browser";
 import { assetUrl } from "@/features/attachments/images";
 import { repoApi } from "@/lib/routes";
 import { forgeFileUrl, type ForgeLinkConfig } from "./links.js";
@@ -106,6 +106,50 @@ export function docFileUrl(repoId: string, id: string, relative: string): string
     .map((part) => encodeURIComponent(part))
     .join("/");
   return repoApi(repoId, `/initiatives/${encodeURIComponent(id)}/docs/${encoded}`);
+}
+
+/** The editor source of a listed `.md` document: `{ text, hash }` (follows the active `?ref=`). */
+export function docSourceUrl(repoId: string, id: string, relative: string): string {
+  const encoded = relative
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  return repoApi(repoId, `/initiatives/${encodeURIComponent(id)}/doc-source/${encoded}`);
+}
+
+/**
+ * `item` with documents created in the basket (`createDoc`, keyed by path with `.md`) added to
+ * `docs`, so the viewer can list and open them before they are committed.
+ */
+export function withPendingDocs<T extends Pick<BoardItem, "docs">>(
+  item: T,
+  pending: ReadonlyMap<string, { created: boolean }>,
+): T {
+  const added: DocEntry[] = [];
+  for (const [file, entry] of pending) {
+    if (!entry.created || !file.endsWith(".md")) continue;
+    const path = file.slice(0, -".md".length);
+    if ((item.docs ?? []).some((doc) => doc.path === path) || added.some((doc) => doc.path === path)) continue;
+    const { kind, phase } = classifyDoc(path);
+    const title = path.slice(path.lastIndexOf("/") + 1);
+    added.push(phase === undefined ? { path, kind, formats: ["md"], title } : { path, kind, formats: ["md"], title, phase });
+  }
+  if (added.length === 0) return item;
+  const docs = [...(item.docs ?? []), ...added].sort((left, right) =>
+    left.path.localeCompare(right.path, "en", { numeric: true }),
+  );
+  return { ...item, docs };
+}
+
+/** `phases/phase-<n>.packet` (no extension): where "New packet" creates a phase's packet. */
+export function phasePacketKey(phase: number): string {
+  return `phases/phase-${phase}.packet`;
+}
+
+/** Starting text of a new phase packet. */
+export function phasePacketTemplate(phase: { id: number; title?: string }): string {
+  const title = phase.title === undefined || phase.title.trim().length === 0 ? "" : `: ${phase.title.trim()}`;
+  return [`# Phase ${phase.id} packet${title}`, "", "## Goal", "", "## Scope", "", "## Tasks", "", "## Done when", ""].join("\n");
 }
 
 /**

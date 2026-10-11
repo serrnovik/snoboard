@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Edit initiative documents from the viewer: markdown documents (phase packets, task files, `ROADMAP.md`,
+  `CONVENTIONS.md`, markdown reports) get an **Edit** button that opens the markdown editor and queues a new
+  `setDoc { id, path, fromHash, to }` edit (path relative to the initiative folder, sha256 of the whole file, 60,000
+  characters max; larger documents are refused with a clear message). The server checks the path against the
+  snapshot listing at the target ref, never the initiative file or HTML, and writes documents in the same single
+  commit as other edits (`Snoboard-Edit: <id>: doc <path>`). Pending document edits render in the viewer with a
+  **pending** badge; the basket shows `<id> · <doc path> — edited`. Pasted images go to the initiative's `assets/`,
+  linked relative to the document. **New doc** in the viewer creates a missing `phases/phase-<n>.packet.md` from a
+  template (`createDoc { id, path, to }`, only `<name>.md` or `phases/<name>.md`, must not exist). New endpoint
+  `GET /api/repos/<repo>/initiatives/<id>/doc-source/<path>` (`{ text, hash }`, honours `?ref=`).
 - Show phase and initiative documents: phase packets (`phases/phase-<n>.packet.md`, `phase-<n>a`, `phase-<n>.<m>`,
   `phase-<n>-<slug>`, `phases/NN-<slug>.md`), task files (`phases/phase-<n>/T<n>.<m>-<slug>.md`) and other `.md` /
   `.html` files of the initiative folder (`ROADMAP.md`, `CONVENTIONS.md`, `phases/README.md`). The snapshot lists them

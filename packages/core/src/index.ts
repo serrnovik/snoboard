@@ -37,8 +37,11 @@ export {
   classifyDoc,
   groupDocs,
   isDocFile,
+  isEditableDocPath,
+  isNewDocPath,
   MAX_DOC_BYTES,
   MAX_DOC_DEPTH,
+  MAX_DOC_PATH_LENGTH,
   MAX_DOCS_PER_INITIATIVE,
   type DocEntry,
   type DocFormat,
@@ -126,15 +129,19 @@ export {
   type SnapshotOptions,
 } from "./merge.js";
 export {
+  applyDocEdit,
   applyEdit,
   bodyHash,
+  docHash,
   EditSchema,
   renderNewInitiative,
   summarizeEdit,
   type ApplyEditResult,
+  type DocEdit,
   type Edit,
   type NewInitiativeInput,
 } from "./edits.js";
+export { MAX_DOC_EDIT_LENGTH } from "./edit-schema.js";
 export { commitsUnder, MAX_ROOT_COMMITS, type CommitWithFiles, type FileChange } from "./git-commits.js";
 export {
   botPatterns,

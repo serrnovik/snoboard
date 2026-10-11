@@ -76,4 +76,14 @@ export {
 export type { BoardItem, LegacyItem, ParsedFileError, Snapshot } from "./merge.js";
 export type { HistoryCommit, RefInfo } from "./git.js";
 export type { InitiativePeople, Person } from "./people.js";
-export { EditSchema, MAX_INITIATIVE_BODY_LENGTH, type Edit } from "./edit-schema.js";
+export { EditSchema, MAX_DOC_EDIT_LENGTH, MAX_INITIATIVE_BODY_LENGTH, type Edit } from "./edit-schema.js";
+export {
+  classifyDoc,
+  isDocFile,
+  isEditableDocPath,
+  isNewDocPath,
+  MAX_DOC_PATH_LENGTH,
+  type DocEntry,
+  type DocFormat,
+  type DocKind,
+} from "./documents.js";

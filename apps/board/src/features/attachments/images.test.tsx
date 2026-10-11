@@ -8,7 +8,7 @@ import { attachmentPayload } from "@/features/basket/SubmitDialog";
 import { resetBasketStore, useBasket } from "@/features/basket/store";
 import { EditControls } from "@/features/details/EditControls";
 import { SummaryMarkdown } from "@/features/details/markdown";
-import { assetPathOf, resolveImageSrc } from "./images";
+import { assetPathFromDoc, assetPathOf, docAssetRef, resolveImageSrc } from "./images";
 import { memoryImageBackend, setImageBackend } from "./store";
 
 const HASH = "ab".repeat(32);
@@ -168,5 +168,25 @@ describe("image attachments", () => {
     const shown = [...document.querySelectorAll("img")].map((img) => img.getAttribute("src"));
     expect(shown).toEqual(["/api/repos/default/initiatives/acme-002/assets/a.png"]);
     expect(document.body.textContent).toContain("[remote]");
+  });
+});
+
+describe("images in initiative documents", () => {
+  it("links the initiative's assets relative to the document and resolves them back", () => {
+    expect(docAssetRef("ROADMAP", "assets/a.png")).toBe("assets/a.png");
+    expect(docAssetRef("phases/phase-1.packet", "assets/a.png")).toBe("../assets/a.png");
+    expect(docAssetRef("phases/phase-1/T1.1-x", "assets/a.png")).toBe("../../assets/a.png");
+    expect(assetPathFromDoc("../assets/a.png", "phases/phase-1.packet")).toBe("assets/a.png");
+    expect(assetPathFromDoc("./assets/a.png", "ROADMAP")).toBe("assets/a.png");
+    expect(assetPathFromDoc("assets/a.png", "phases/phase-1.packet")).toBeUndefined();
+    expect(assetPathFromDoc("../../assets/a.png", "phases/phase-1.packet")).toBeUndefined();
+    expect(assetPathFromDoc("https://x.example/a.png", "ROADMAP")).toBeUndefined();
+    const pending = new Map([["assets/a.png", "blob:local"]]);
+    expect(resolveImageSrc("../assets/a.png", { repoId: "default", id: "acme-001", from: "phases/phase-1.packet", pending })).toBe(
+      "blob:local",
+    );
+    expect(resolveImageSrc("../assets/b.png", { repoId: "default", id: "acme-001", from: "phases/phase-1.packet" })).toBe(
+      "/api/repos/default/initiatives/acme-001/assets/b.png",
+    );
   });
 });

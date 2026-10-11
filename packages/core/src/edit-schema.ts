@@ -3,6 +3,7 @@ import { ASSET_PATH, ATTACHMENT_TYPES, extensionFor, MAX_ATTACHMENT_BYTES, NEW_I
 import { MAX_ISSUE_REFS, parseIssueRef } from "./issues.js";
 import { LinkSchema, MAX_LINKS } from "./links.js";
 import { MAX_ICON_LENGTH, parseIcon } from "./icons.js";
+import { isEditableDocPath, isNewDocPath, MAX_DOC_PATH_LENGTH } from "./documents.js";
 
 // No Node imports here: the browser bundle (snoboard/browser) uses this schema.
 export const PROJECT_NAME = /^[a-z0-9_][a-z0-9_-]*$/;
@@ -13,6 +14,16 @@ export const DEPENDENCY_ID = /^[a-z0-9_-]+-\d{3}(#(0|[1-9]\d*))?$/;
 /** Upper bound for initiative body text in setBody and createInitiative (characters). */
 export const MAX_INITIATIVE_BODY_LENGTH = 60_000;
 const BodyText = z.string().max(MAX_INITIATIVE_BODY_LENGTH);
+/** Upper bound for document text in setDoc and createDoc (characters); same as the initiative body. */
+export const MAX_DOC_EDIT_LENGTH = MAX_INITIATIVE_BODY_LENGTH;
+const EditableDocPath = z
+  .string()
+  .max(MAX_DOC_PATH_LENGTH)
+  .refine(isEditableDocPath, { message: "must be a .md document of the initiative folder (not the initiative file)" });
+const NewDocPath = z
+  .string()
+  .max(MAX_DOC_PATH_LENGTH)
+  .refine(isNewDocPath, { message: "must be <name>.md or phases/<name>.md in the initiative folder" });
 const IssueRefText = z
   .string()
   .max(300)
@@ -75,6 +86,22 @@ export const EditSchema = z.discriminatedUnion("kind", [
     id: z.string().regex(INITIATIVE_ID),
     fromHash: z.string().regex(/^[a-f0-9]{64}$/),
     to: BodyText,
+  }),
+  z.object({
+    kind: z.literal("setDoc"),
+    id: z.string().regex(INITIATIVE_ID),
+    /** Relative to the initiative folder, with `.md`: a document or report the board lists. */
+    path: EditableDocPath,
+    /** sha256 hex of the whole current file. */
+    fromHash: z.string().regex(/^[a-f0-9]{64}$/),
+    to: z.string().max(MAX_DOC_EDIT_LENGTH),
+  }),
+  z.object({
+    kind: z.literal("createDoc"),
+    id: z.string().regex(INITIATIVE_ID),
+    /** Relative to the initiative folder: `<name>.md` or `phases/<name>.md`. Must not exist yet. */
+    path: NewDocPath,
+    to: z.string().max(MAX_DOC_EDIT_LENGTH),
   }),
   z.object({
     kind: z.literal("setIssues"),

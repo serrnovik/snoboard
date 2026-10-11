@@ -5,6 +5,7 @@ import {
   ASSET_FILE,
   detectImageType,
   EditSchema,
+  isEditableDocPath,
   isValidBranchName,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_TOTAL_BYTES,
@@ -350,7 +351,7 @@ async function prepareAtHead(
   const repo = config.forge.repo;
   const reapplied = new Set<string>();
   const reader: ReadBlob = async (ref, filePath) => {
-    if (!isEditablePath(filePath, config)) {
+    if (!isEditablePath(filePath, config) && !isEditableDocFilePath(filePath, config)) {
       throw new SubmitStop(fail("path_not_allowed", `path not allowed: ${filePath}`));
     }
     const remote = await getFileEntry(repo, head, filePath, token, options);
@@ -373,10 +374,11 @@ async function prepareAtHead(
     throw new SubmitStop(fail("rejected", "nothing to commit"));
   }
   for (const file of prepared.files) {
-    if (!isEditablePath(file.path, config)) {
+    const allowed = file.doc === true ? isEditableDocFilePath(file.path, config) : isEditablePath(file.path, config);
+    if (!allowed) {
       throw new SubmitStop(fail("path_not_allowed", `path not allowed: ${file.path}`));
     }
-    if (file.baseSha === null) await assertNumberFree(input, file.path, head);
+    if (file.baseSha === null && file.doc !== true) await assertNumberFree(input, file.path, head);
   }
   const images: CommitFile[] = [];
   const listed = new Map<string, Promise<string[]>>();
@@ -644,6 +646,31 @@ export function isEditablePath(filePath: string, config: Config): boolean {
     folder !== undefined &&
     FOLDER_SEGMENT.test(folder) &&
     file === config.file
+  );
+}
+
+/**
+ * A markdown document below an initiative folder: `<root>/<project>/<NNN>-<slug>/<doc>`, where
+ * `<doc>` passes `isEditableDocPath` (`.md`, at most three plain segments or a report, no dot
+ * segments) and is not the initiative file. Prepare also requires the document to be listed.
+ */
+export function isEditableDocFilePath(filePath: string, config: Config): boolean {
+  if (filePath.length === 0 || filePath.length > 512) return false;
+  if (filePath.includes("\\") || filePath.includes("\0") || filePath.includes(":")) return false;
+  if (filePath.split("/").some((part) => part.length === 0 || part === "." || part === "..")) return false;
+  const prefix = `${config.root}/`;
+  if (!filePath.startsWith(prefix)) return false;
+  const parts = filePath.slice(prefix.length).split("/");
+  if (parts.length < 3) return false;
+  const [project, folder, ...rest] = parts;
+  const relative = rest.join("/");
+  return (
+    project !== undefined &&
+    PROJECT_SEGMENT.test(project) &&
+    folder !== undefined &&
+    FOLDER_SEGMENT.test(folder) &&
+    relative !== config.file &&
+    isEditableDocPath(relative)
   );
 }
 

@@ -1,4 +1,5 @@
 import {
+  applyDocEdit,
   applyEdit,
   MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_ATTACHMENTS,
@@ -41,6 +42,8 @@ export type PreparedFile = {
   /** Git blob sha of the file the edits were applied to. Null when the file is new. */
   baseSha: string | null;
   text: string;
+  /** A document of the initiative folder (`setDoc` / `createDoc`), not an initiative file. */
+  doc?: true;
 };
 
 /** An image the batch adds, at its full repo-relative path. The bytes come with the submit. */
@@ -63,9 +66,11 @@ type Draft = {
   baseSha: string | null;
   text: string;
   failed: boolean;
+  doc?: true;
 };
 
-type FieldEdit = Exclude<Edit, { kind: "createInitiative" | "addAttachment" }>;
+type FieldEdit = Exclude<Edit, { kind: "createInitiative" | "addAttachment" | "setDoc" | "createDoc" }>;
+type DocEdit = Extract<Edit, { kind: "setDoc" | "createDoc" }>;
 type CreateEdit = Extract<Edit, { kind: "createInitiative" }>;
 type AttachmentEdit = Extract<Edit, { kind: "addAttachment" }>;
 
@@ -120,6 +125,10 @@ export async function prepareEdits(
       results.push({ index, ok: true });
       continue;
     }
+    if (edit.kind === "setDoc" || edit.kind === "createDoc") {
+      results.push(await applyDoc(index, edit));
+      continue;
+    }
     results.push(await applyField(index, edit));
   }
 
@@ -146,7 +155,7 @@ export async function prepareEdits(
   const files: PreparedFile[] = [];
   for (const draft of drafts.values()) {
     if (draft.failed) continue;
-    files.push({ path: draft.path, baseSha: draft.baseSha, text: draft.text });
+    files.push({ path: draft.path, baseSha: draft.baseSha, text: draft.text, ...(draft.doc ? { doc: true as const } : {}) });
   }
   return { results, files, attachments };
 
@@ -224,6 +233,47 @@ export async function prepareEdits(
       number,
       path: rendered.path,
     };
+  }
+
+  /**
+   * `setDoc` / `createDoc`. The path is checked against the snapshot listing for the
+   * initiative (documents and reports, `.md` only), never the initiative file itself.
+   */
+  async function applyDoc(index: number, edit: DocEdit): Promise<EditResult> {
+    const item = snapshot.items.find((entry) => entry.id === edit.id);
+    if (item === undefined) return { index, ok: false, error: `unknown initiative ${edit.id}` };
+    const folder = parentDir(item.path);
+    const target = `${folder}/${edit.path}`;
+    if (edit.path === config.file || target === item.path || !isContainedPath(target)) {
+      return { index, ok: false, error: `${edit.id}: path not allowed: ${edit.path}` };
+    }
+    const listed = isListedDoc(item, edit.path);
+    if (edit.kind === "setDoc" && !listed) {
+      return { index, ok: false, error: `${edit.id}: ${edit.path} is not a listed document`, path: target };
+    }
+    if (edit.kind === "createDoc" && listed) {
+      return { index, ok: false, error: `${edit.id}: ${edit.path} already exists`, path: target };
+    }
+    let draft = drafts.get(target);
+    if (draft !== undefined && !draft.doc) {
+      return { index, ok: false, error: `${edit.id}: path not allowed: ${edit.path}`, path: target };
+    }
+    let current: string | undefined;
+    if (draft === undefined) {
+      const blob = await readBlob(refSha(item.sourceRef), target);
+      draft = { path: target, baseSha: blob?.sha ?? null, text: blob?.text ?? "", failed: false, doc: true };
+      current = blob?.text;
+    } else {
+      current = draft.text;
+    }
+    const applied = applyDocEdit(current, edit);
+    if ("error" in applied) {
+      if (drafts.has(target)) draft.failed = true;
+      return { index, ok: false, error: `${edit.id}: ${applied.error}`, path: target };
+    }
+    draft.text = applied.text;
+    drafts.set(target, draft);
+    return { index, ok: true, path: target };
   }
 
   async function applyField(index: number, edit: FieldEdit): Promise<EditResult> {
@@ -402,6 +452,18 @@ function synthetic(item: Snapshot["items"][number]): ParsedFile {
       ...(item.phases === undefined ? {} : { phases: item.phases.map((phase) => ({ ...phase })) }),
     },
   };
+}
+
+/** `relative` (with `.md`) is a markdown document or report the snapshot listed for `item`. */
+function isListedDoc(item: Snapshot["items"][number], relative: string): boolean {
+  const match = /^(.+)\.md$/.exec(relative);
+  if (match === null) return false;
+  const base = match[1] ?? "";
+  if (base.startsWith("reports/")) {
+    const name = base.slice("reports/".length);
+    return (item.reports ?? []).some((report) => report.name === name && report.formats.includes("md"));
+  }
+  return (item.docs ?? []).some((doc) => doc.path === base && doc.formats.includes("md"));
 }
 
 function parentDir(filePath: string): string {

@@ -173,6 +173,10 @@ export function formatPending(edit: Edit): string {
       return `links ${edit.from.length} → ${edit.to.length}`;
     case "addAttachment":
       return `image ${edit.path}`;
+    case "setDoc":
+      return "edited";
+    case "createDoc":
+      return "new";
     case "createInitiative":
       return `create ${edit.project}/${edit.slug}: ${edit.title}`;
   }
@@ -186,9 +190,10 @@ export function forgetImages(edits: readonly Edit[]): void {
   }
 }
 
-/** Title shown beside an edit. Snapshot title, the new title for a create, or the id. */
+/** Title shown beside an edit. Snapshot title, the new title for a create, the document path, or the id. */
 export function editTitle(edit: Edit, titles?: ReadonlyMap<string, string>): string {
   if (edit.kind === "createInitiative") return edit.title;
+  if (edit.kind === "setDoc" || edit.kind === "createDoc") return edit.path;
   const known = titles?.get(edit.id);
   if (known !== undefined && known.trim().length > 0) return known;
   return edit.id;
@@ -320,6 +325,10 @@ function mergeInto(edits: readonly Edit[], next: Edit): Edit[] {
 function sameTarget(left: Edit, right: Edit): boolean {
   if (left.kind === "createInitiative" || right.kind === "createInitiative") return false;
   if (left.kind === "addAttachment" || right.kind === "addAttachment") return false;
+  if (isDocEdit(left) || isDocEdit(right)) {
+    // A document created in this basket stays a createDoc when it is edited again.
+    return isDocEdit(left) && isDocEdit(right) && left.id === right.id && left.path === right.path;
+  }
   if (left.kind !== right.kind || left.id !== right.id) return false;
   if (left.kind === "setPhaseStatus" && right.kind === "setPhaseStatus") return left.phase === right.phase;
   return true;
@@ -329,6 +338,10 @@ function withFirstFrom(existing: Edit, next: Edit): Edit {
   switch (existing.kind) {
     case "setBody":
       return next.kind === "setBody" ? { ...next, fromHash: existing.fromHash } : next;
+    case "setDoc":
+      return next.kind === "setDoc" ? { ...next, fromHash: existing.fromHash } : next;
+    case "createDoc":
+      return isDocEdit(next) ? { kind: "createDoc", id: existing.id, path: existing.path, to: next.to } : next;
     case "setLabels":
       return next.kind === "setLabels" ? { ...next, from: existing.from } : next;
     case "setIssues":
@@ -354,6 +367,8 @@ function withFirstFrom(existing: Edit, next: Edit): Edit {
 function isNoOp(edit: Edit): boolean {
   switch (edit.kind) {
     case "setBody":
+    case "setDoc":
+    case "createDoc":
     case "createInitiative":
     case "addAttachment":
       return false;
@@ -372,6 +387,25 @@ function isNoOp(edit: Edit): boolean {
     case "setPhaseStatus":
       return edit.from === edit.to;
   }
+}
+
+type DocEdit = Extract<Edit, { kind: "setDoc" | "createDoc" }>;
+
+function isDocEdit(edit: Edit): edit is DocEdit {
+  return edit.kind === "setDoc" || edit.kind === "createDoc";
+}
+
+/**
+ * Pending document text per path (relative to the initiative folder, with `.md`) for
+ * initiative `id`: the last `setDoc` / `createDoc` in the basket wins.
+ */
+export function pendingDocs(edits: readonly Edit[], id: string): Map<string, { text: string; created: boolean }> {
+  const map = new Map<string, { text: string; created: boolean }>();
+  for (const edit of edits) {
+    if (!isDocEdit(edit) || edit.id !== id) continue;
+    map.set(edit.path, { text: edit.to, created: edit.kind === "createDoc" });
+  }
+  return map;
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {

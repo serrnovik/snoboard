@@ -75,6 +75,8 @@ Other `.md` / `.html` files in the initiative folder show too: phase packets (`p
 documents (`ROADMAP.md`, `CONVENTIONS.md`, `phases/README.md`). Phase rows get chips for their packet and an expandable
 "N tasks"; a **Documents** section lists the rest, and the card shows "N docs". The same viewer opens them, with a
 navigation tree (Initiative / Phase N / Reports), relative links between documents, `#anchors` and **Open on GitHub**.
+With editing on, markdown documents have an **Edit** button (queued in the basket like other edits, shown as
+**pending** until submitted), and **New doc** adds a missing phase packet from a template.
 See [docs/configuration.md](docs/configuration.md#documents).
 
 ![Document viewer with a phase packet](docs/img/docs.png)
@@ -84,6 +86,7 @@ See [docs/configuration.md](docs/configuration.md#documents).
 Edits collect in a basket in the browser. Nothing is written until you submit.
 
 - **Fields.** You can edit the title, status, priority, labels, issue refs, external links, phase status, and the body text. The body uses a markdown editor with a live preview.
+- **Documents.** Phase packets, task files, `ROADMAP.md` and other markdown documents of an initiative are edited from the document viewer with the same editor. See [docs/editing.md](docs/editing.md#documents).
 - **Images.** Paste, drop or attach PNG, JPEG, WebP or GIF images. They are committed next to the initiative.
 - **New initiative.** Pick the project, title and slug, write the text, set status and priority, and choose dependencies. The number is assigned when you submit, as the next free number in that project.
 - **Proposed changes.** Edits that are pushed but not merged show on the card as `proposed`, with the new values.

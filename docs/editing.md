@@ -1,6 +1,6 @@
 # Editing
 
-Snoboard can save small changes from the board: status, priority, phase status, title, icon, labels, issue refs, external links, the markdown body (with attached images), or a new initiative. Changes stay in the browser until someone submits them. Set `SNOBOARD_EDIT_MODES` to turn this on. Leave it empty, or unset, and the board stays read-only.
+Snoboard can save small changes from the board: status, priority, phase status, title, icon, labels, issue refs, external links, the markdown body (with attached images), the initiative's markdown documents (phase packets, task files, `ROADMAP.md`, markdown reports, ...), or a new initiative. Changes stay in the browser until someone submits them. Set `SNOBOARD_EDIT_MODES` to turn this on. Leave it empty, or unset, and the board stays read-only.
 
 | Env var | Meaning |
 | --- | --- |
@@ -66,9 +66,33 @@ may-submit) and allows 20 new issues per person per hour.
 **Links** is a small table of title and URL rows. **Save links** checks every row (title 1 to 120
 characters, `https:` or `mailto:` URL) and queues one `setLinks` edit. See [schema.md](schema.md#links).
 
+## Documents
+
+The document viewer (phase packets, task files, `ROADMAP.md`, `CONVENTIONS.md`, markdown reports, ...) shows an
+**Edit** button on markdown documents when editing is on. It opens the same markdown editor as **Edit text**;
+**Save** queues a `setDoc` edit in the basket and **Cancel** drops the draft. HTML documents are never editable.
+
+- The editor loads the committed text from `GET /api/repos/<repo>/initiatives/<id>/doc-source/<path>` (honours
+  `?ref=`), which also returns the sha256 of the whole file. That hash is the edit's `fromHash`: if the file changed on
+  the target branch before the submit, the edit is `stale` and nothing is written.
+- Documents over 60,000 characters (the body limit) are not editable in the board; the editor says so.
+- Until the basket is submitted, the viewer renders the pending version, marks the document **pending** in its
+  navigation and title, and the basket lists it as `<id> · <doc path> — edited`.
+- `path` is relative to the initiative folder and must be a `.md` document or report the snapshot lists for that
+  initiative at the target ref. The initiative file itself is edited with **Edit text** (`setBody`), never with
+  `setDoc`.
+- Images pasted into a document go to the initiative's `assets/` folder like any other attachment; the markdown links
+  to them relative to the document (`../assets/shot.png` from `phases/phase-1.packet.md`).
+- **New doc** in the viewer's navigation creates `phases/phase-<n>.packet.md` for a phase that has no packet yet,
+  from a short template, as a `createDoc` edit (`{ id, path, to }`). New documents may only be `<name>.md` at the top of
+  the initiative folder or `phases/<name>.md`, and must not exist yet. The viewer lists them as **new** until submitted.
+
+Document edits go into the same single commit as every other edit in the basket, with a trailer line per document
+(`Snoboard-Edit: acme-002: doc ROADMAP.md`, `Snoboard-Edit: acme-002: new doc phases/phase-2.packet.md`).
+
 ## Images
 
-Both markdown editors (**Edit text** in the details panel and **Text** in **New initiative**) take images:
+The markdown editors (**Edit text** in the details panel, **Text** in **New initiative**, and **Edit** in the document viewer) take images:
 paste one, drop one, or use **Attach image** in the toolbar.
 
 - Only PNG, JPEG, WebP and GIF, recognised by their first bytes (the file name and browser type do not
@@ -155,7 +179,7 @@ Open edit branches show as **proposed** on their cards until they are merged or 
 
 ## Conflicts
 
-Each edit remembers the value you saw (`from`), or a hash of the text for body edits.
+Each edit remembers the value you saw (`from`), or a hash of the text for body and document edits.
 
 | Situation | Result |
 | --- | --- |
@@ -163,6 +187,7 @@ Each edit remembers the value you saw (`from`), or a hash of the text for body e
 | The field changed upstream (`from` no longer matches) | `409 rejected`, the stale edit is marked, nothing written |
 | The branch moved twice during a `direct` submit | `409 branch_moved`, nothing written; try again |
 | A new initiative's number was taken meanwhile | `409 number_taken`; validate again to get the next number |
+| A document changed upstream, or a new document already exists | `409 rejected` (`stale` / `already exists`), nothing written |
 
 ## Audit trail
 

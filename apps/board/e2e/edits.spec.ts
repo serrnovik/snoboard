@@ -53,6 +53,38 @@ test("queue two edits, validate, submit a PR, and see the card as proposed", asy
   expect(stored).not.toContain(BOT_TOKEN);
 });
 
+test("edit a document from the viewer: basket, pending render, and server validation", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Password").fill(E2E_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByTestId("card-acme-002")).toBeVisible({ timeout: 30_000 });
+
+  await page.goto("/?open=acme-002");
+  await page.getByRole("dialog").getByTestId("doc-open-ROADMAP").click();
+  const viewer = page.getByTestId("report-dialog");
+  await expect(viewer.getByRole("heading", { name: "Billing roadmap" })).toBeVisible();
+  await viewer.getByTestId("doc-edit").click();
+  const editor = viewer.getByRole("textbox", { name: "Edit ROADMAP.md" });
+  await expect(editor).toHaveValue(/# Billing roadmap/);
+  await editor.fill("# Billing roadmap\n\nInvoices first, then receipts.\n");
+  await viewer.getByTestId("doc-edit-save").click();
+
+  await expect(viewer.getByText("Invoices first, then receipts.")).toBeVisible();
+  await expect(viewer.getByTestId("doc-pending-current")).toHaveText("pending");
+  await expect(viewer.getByTestId("doc-pending-ROADMAP")).toHaveText("pending");
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("basket-count")).toHaveText("1");
+  await expect(page.getByTestId("basket-panel")).toContainText("acme-002 · ROADMAP.md — edited");
+
+  // Validation reads the document from the clone and accepts the hash the editor loaded.
+  await page.getByTestId("basket-panel").getByRole("button", { name: "Submit" }).click();
+  const submit = page.getByRole("dialog", { name: "Submit basket" });
+  await expect(submit.getByTestId("validate-result")).toHaveCount(1);
+  await expect(submit.getByTestId("validate-error")).toHaveCount(0);
+});
+
 test("submit refuses a request without the CSRF token", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Password").fill(E2E_PASSWORD);

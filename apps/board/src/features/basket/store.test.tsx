@@ -3,7 +3,7 @@
 import { cleanup, renderHook } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { basketStorageKey, resetBasketStore, useBasket } from "@/features/basket/store";
+import { basketStorageKey, describeEdit, pendingDocs, resetBasketStore, useBasket } from "@/features/basket/store";
 
 const status = { kind: "setStatus" as const, id: "acme-001", from: "planned", to: "in-progress" };
 const hashA = "a".repeat(64);
@@ -125,5 +125,38 @@ describe("basket store", () => {
     expect(widgets.result.current.list()).toEqual([]);
     expect(localStorage.getItem(basketStorageKey("acme"))).toBe(JSON.stringify([status]));
     expect(localStorage.getItem(basketStorageKey("widgets"))).toBeNull();
+  });
+});
+
+describe("document edits in the basket", () => {
+  it("merges edits of the same document, keeps the first hash, and keeps a created document a createDoc", () => {
+    const basket = renderHook(() => useBasket());
+    act(() => {
+      basket.result.current.add({ kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: hashA, to: "one" });
+      basket.result.current.add({ kind: "setDoc", id: "acme-001", path: "phases/phase-1.packet.md", fromHash: hashB, to: "p" });
+      basket.result.current.add({ kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: hashB, to: "two" });
+      basket.result.current.add({ kind: "createDoc", id: "acme-001", path: "NOTES.md", to: "draft" });
+      basket.result.current.add({ kind: "setDoc", id: "acme-001", path: "NOTES.md", fromHash: hashA, to: "final" });
+    });
+    expect(basket.result.current.list()).toEqual([
+      { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: hashA, to: "two" },
+      { kind: "setDoc", id: "acme-001", path: "phases/phase-1.packet.md", fromHash: hashB, to: "p" },
+      { kind: "createDoc", id: "acme-001", path: "NOTES.md", to: "final" },
+    ]);
+    expect(pendingDocs(basket.result.current.list(), "acme-001").get("NOTES.md")).toEqual({ text: "final", created: true });
+    expect(describeEdit(basket.result.current.list()[1]!)).toBe("acme-001 · phases/phase-1.packet.md — edited");
+  });
+
+  it("drops edits whose path is not an editable document", () => {
+    localStorage.setItem(
+      basketStorageKey("default"),
+      JSON.stringify([
+        { kind: "setDoc", id: "acme-001", path: "../x.md", fromHash: hashA, to: "x" },
+        { kind: "setDoc", id: "acme-001", path: "initiative.md", fromHash: hashA, to: "x" },
+        { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: hashA, to: "ok" },
+      ]),
+    );
+    const basket = renderHook(() => useBasket());
+    expect(basket.result.current.list()).toEqual([{ kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: hashA, to: "ok" }]);
   });
 });

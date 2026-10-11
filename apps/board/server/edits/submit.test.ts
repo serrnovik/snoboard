@@ -2,7 +2,7 @@ import { createHash, createSign, generateKeyPairSync, randomBytes, type JsonWebK
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bodyHash, buildSnapshot, loadConfig, type Config, type Snapshot } from "snoboard";
+import { bodyHash, buildSnapshot, docHash, loadConfig, type Config, type Snapshot } from "snoboard";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTmpRepo } from "../../../../packages/core/src/test-utils/tmp-repo.ts";
 import { resetAuthConfig, setAuthConfig } from "../auth/env.js";
@@ -18,6 +18,7 @@ import {
   allowSubmit,
   chooseSubmitCredential,
   commitMessage,
+  isEditableDocFilePath,
   isEditablePath,
   PASSWORD_BOT_IDENTITY,
   passwordIdentity,
@@ -373,6 +374,73 @@ describe("POST /api/edits/submit", () => {
     expect(response.status).toBe(409);
     expect((await json(response)).code).toBe("rejected");
     expect(github.commitCount()).toBe(0);
+  });
+
+  it("docs: a document edit lands in the same commit as other edits, with a doc trailer", async () => {
+    const user = await signIn();
+    github.pushCommit({ [ROADMAP]: roadmapText });
+    seedStore(withDocs(), config);
+    const response = await submit(user, {
+      edits: [
+        statusEdit(),
+        { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: docHash(roadmapText), to: "# Roadmap\n\nNew plan.\n" },
+        { kind: "createDoc", id: "acme-001", path: "phases/phase-2.packet.md", to: "# Phase 2 packet\n" },
+      ],
+      mode: "direct",
+    });
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(github.commitCount()).toBe(1);
+    expect(github.fileAt(body.commit, ROADMAP)).toBe("# Roadmap\n\nNew plan.\n");
+    expect(github.fileAt(body.commit, "initiatives/acme/001-alpha/phases/phase-2.packet.md")).toBe("# Phase 2 packet\n");
+    expect(github.fileAt(body.commit, ALPHA)).toContain("status: planned");
+    const message = github.commit(body.commit).message;
+    expect(message).toContain("Snoboard-Edit: acme-001: doc ROADMAP.md");
+    expect(message).toContain("Snoboard-Edit: acme-001: new doc phases/phase-2.packet.md");
+  });
+
+  it("docs: a stale document, an unlisted one, or a new one that exists at the head commits nothing", async () => {
+    const user = await signIn();
+    github.pushCommit({
+      [ROADMAP]: "# Roadmap\n\nChanged upstream.\n",
+      "initiatives/acme/001-alpha/NOTES.md": "already here\n",
+    });
+    seedStore(withDocs(), config);
+    for (const edit of [
+      { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: docHash(roadmapText), to: "mine" },
+      { kind: "setDoc", id: "acme-001", path: "NOTES.md", fromHash: docHash("already here\n"), to: "mine" },
+      { kind: "createDoc", id: "acme-001", path: "NOTES.md", to: "mine" },
+    ]) {
+      const response = await submit(user, { edits: [statusEdit(), edit], mode: "direct" }, await csrfFor(user));
+      expect(response.status, JSON.stringify(edit)).toBe(409);
+      expect((await json(response)).code).toBe("rejected");
+    }
+    expect(github.commitCount()).toBe(0);
+  });
+
+  it("docs: only markdown documents below an initiative folder are writable paths", () => {
+    for (const good of [
+      ROADMAP,
+      "initiatives/acme/001-alpha/phases/phase-1.packet.md",
+      "initiatives/acme/001-alpha/phases/phase-1/T1.1-x.md",
+      "initiatives/acme/001-alpha/reports/final.report.md",
+    ]) {
+      expect(isEditableDocFilePath(good, config), good).toBe(true);
+    }
+    for (const bad of [
+      ALPHA,
+      "initiatives/acme/001-alpha/ROADMAP.html",
+      "initiatives/acme/001-alpha/../002-beta/ROADMAP.md",
+      "initiatives/acme/001-alpha/phases/../initiative.md",
+      "initiatives/acme/ROADMAP.md",
+      "initiatives/acme/alpha/ROADMAP.md",
+      "docs/acme/001-alpha/ROADMAP.md",
+      "/initiatives/acme/001-alpha/ROADMAP.md",
+      "initiatives/acme/001-alpha/a/b/c/d.md",
+      ".github/workflows/x.md",
+    ]) {
+      expect(isEditableDocFilePath(bad, config), bad).toBe(false);
+    }
   });
 
   it("refuses a mode that is not enabled, before calling GitHub", async () => {
@@ -848,6 +916,21 @@ function imageEdit(bytes: Buffer, overrides: Record<string, unknown> = {}): Reco
 
 function imagePayload(bytes: Buffer): Record<string, string> {
   return { [createHash("sha256").update(bytes).digest("hex")]: bytes.toString("base64") };
+}
+
+const ROADMAP = "initiatives/acme/001-alpha/ROADMAP.md";
+const roadmapText = "# Roadmap\n\nOld plan.\n";
+
+/** The snapshot with alpha listing `ROADMAP.md` (as if the tree had it). */
+function withDocs(): Snapshot {
+  return {
+    ...snapshot,
+    items: snapshot.items.map((item) =>
+      item.id === "acme-001"
+        ? { ...item, docs: [{ path: "ROADMAP", kind: "initiative-doc" as const, formats: ["md" as const], title: "ROADMAP" }] }
+        : item,
+    ),
+  };
 }
 
 function statusEdit(): Record<string, unknown> {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { bodyHash, buildGraph, buildSnapshot, loadConfig, type Config, type Snapshot } from "snoboard";
+import { bodyHash, buildGraph, buildSnapshot, docHash, loadConfig, MAX_DOC_EDIT_LENGTH, type Config, type Snapshot } from "snoboard";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTmpRepo } from "../../../packages/core/src/test-utils/tmp-repo.ts";
 import { githubRepoFromUrl, resetRefreshLimits } from "./api.js";
@@ -688,6 +688,80 @@ describe("read-only API", () => {
       // The URL parser folds these dot segments before routing; they must still never answer a file.
       expect((await app.request(`${base}/../../002-billing/OTHER.md`, authed())).status).toBe(404);
       expect((await app.request(`${base}/%2e%2e/002-billing/OTHER.md`, authed())).status).toBe(404);
+    } finally {
+      setInitiativeRepoDir(undefined);
+      await repo.remove();
+    }
+  });
+
+  it("serves editable document sources with their hash and validates setDoc against the clone", async () => {
+    const files = await readTree(demoRoot);
+    const configText = files[".snoboard.yml"];
+    if (configText === undefined) throw new Error("demo repo is missing .snoboard.yml");
+    const config = loadConfig(configText);
+    const folder = "initiatives/acme/001-onboarding";
+    const roadmap = "# Roadmap\r\n\r\nPlan.\r\n";
+    const repo = await createTmpRepo({
+      commits: [
+        {
+          message: "demo",
+          files: {
+            ...files,
+            [`${folder}/ROADMAP.md`]: roadmap,
+            [`${folder}/VISUAL.html`]: "<p>x</p>",
+            [`${folder}/BIG.md`]: "x".repeat(MAX_DOC_EDIT_LENGTH + 1),
+            [`${folder}/reports/final.report.md`]: "# Final\n",
+          },
+        },
+      ],
+    });
+    try {
+      const snapshot = await buildSnapshot(repo.dir, config);
+      seedStore(snapshot, config);
+      setInitiativeRepoDir(repo.dir);
+      const base = "/api/repos/default/initiatives/acme-001/doc-source";
+      const source = await app.request(`${base}/ROADMAP.md`, authed());
+      expect(source.status).toBe(200);
+      expect(source.headers.get("cache-control")).toBe("private, no-store");
+      const payload = (await source.json()) as { text: string; hash: string };
+      expect(payload).toEqual({ text: roadmap, hash: docHash(roadmap) });
+      expect((await app.request(`${base}/reports/final.report.md`, authed())).status).toBe(200);
+
+      const big = await app.request(`${base}/BIG.md`, authed());
+      expect(big.status).toBe(422);
+      expect(await big.json()).toEqual({
+        code: "too_large",
+        error: `BIG.md is too large to edit in the board (over ${MAX_DOC_EDIT_LENGTH} characters)`,
+      });
+      for (const route of [
+        `${base}/initiative.md`,
+        `${base}/VISUAL.html`,
+        `${base}/missing.md`,
+        `${base}/..%2F002-billing%2Finitiative.md`,
+        "/api/repos/default/initiatives/acme-999/doc-source/ROADMAP.md",
+      ]) {
+        expect((await app.request(route, authed())).status, route).toBe(404);
+      }
+      expect((await app.request(`${base}/ROADMAP.md`)).status).toBe(401);
+
+      const validate = await app.request(
+        "/api/repos/default/edits/validate",
+        authed("board-reader", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            edits: [
+              { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: payload.hash, to: "# Roadmap\n\nNew.\n" },
+              { kind: "setDoc", id: "acme-001", path: "ROADMAP.md", fromHash: "0".repeat(64), to: "x" },
+              { kind: "createDoc", id: "acme-001", path: "phases/phase-9.packet.md", to: "# Nine\n" },
+            ],
+          }),
+        }),
+      );
+      expect(validate.status).toBe(200);
+      const result = (await validate.json()) as { results: Array<{ ok: boolean; error?: string }> };
+      expect(result.results.map((entry) => entry.ok)).toEqual([true, false, true]);
+      expect(result.results[1]?.error).toBe("acme-001: stale");
     } finally {
       setInitiativeRepoDir(undefined);
       await repo.remove();

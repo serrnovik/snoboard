@@ -39,6 +39,33 @@ export function assetPathOf(src: string): string | undefined {
   return ASSET_PATH.test(trimmed) ? trimmed : undefined;
 }
 
+/**
+ * The `assets/<file>` that `src` points at from the document `from` (a path below the
+ * initiative folder without extension, `phases/phase-1.packet`): `../assets/a.png` there is
+ * `assets/a.png`. Undefined for remote URLs, absolute paths and anything else.
+ */
+export function assetPathFromDoc(src: string, from: string): string | undefined {
+  const clean = src.trim();
+  if (clean.length === 0 || clean.startsWith("/") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(clean)) return undefined;
+  const parts = from.split("/").slice(0, -1);
+  for (const part of clean.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (parts.length === 0) return undefined;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  const joined = parts.join("/");
+  return ASSET_PATH.test(joined) ? joined : undefined;
+}
+
+/** How the document `from` links to `assets/<file>`: `../assets/a.png` from `phases/phase-1.packet`. */
+export function docAssetRef(from: string, path: string): string {
+  return `${"../".repeat(from.split("/").length - 1)}${path}`;
+}
+
 /** The authenticated endpoint that serves a committed image of initiative `id`. */
 export function assetUrl(repoId: string, id: string, path: string): string {
   const file = path.slice("assets/".length);
@@ -52,9 +79,9 @@ export function assetUrl(repoId: string, id: string, path: string): string {
  */
 export function resolveImageSrc(
   src: string,
-  context: { repoId: string; id?: string; pending?: ReadonlyMap<string, string> },
+  context: { repoId: string; id?: string; pending?: ReadonlyMap<string, string>; from?: string },
 ): string {
-  const path = assetPathOf(src);
+  const path = context.from === undefined ? assetPathOf(src) : assetPathFromDoc(src, context.from);
   if (path === undefined) return "";
   const local = context.pending?.get(path);
   if (local !== undefined) return local;
@@ -94,9 +121,11 @@ function isAttachment(edit: Edit): edit is AttachmentEdit {
  * Images pasted, dropped or picked in one editor. They stay pending (bytes in
  * IndexedDB, object URLs for the preview) until the caller turns them into
  * basket edits with `editsFor`, or drops them with `discard`.
- * `id` is the initiative the text belongs to; omit it for a new initiative.
+ * `id` is the initiative the text belongs to; omit it for a new initiative. `from` is the
+ * document being edited (path below the initiative folder, no extension): images still go to
+ * the initiative's `assets/`, and the markdown links to them relative to that document.
  */
-export function useImageAttachments({ repoId, id }: { repoId: string; id?: string }) {
+export function useImageAttachments({ repoId, id, from }: { repoId: string; id?: string; from?: string }) {
   const basket = useBasket(repoId);
   const [pending, setPending] = useState<PendingImage[]>([]);
   const [urls, setUrls] = useState<ReadonlyMap<string, string>>(new Map());
@@ -187,7 +216,7 @@ export function useImageAttachments({ repoId, id }: { repoId: string; id?: strin
         const url = objectUrl(read.bytes, read.contentType);
         if (url !== undefined) addedUrls.set(path, url);
         added.push(image);
-        lines.push(markdownFor(file.name, path));
+        lines.push(markdownFor(file.name, from === undefined ? path : docAssetRef(from, path)));
         count += 1;
         total += image.size;
       }
@@ -198,12 +227,18 @@ export function useImageAttachments({ repoId, id }: { repoId: string; id?: strin
       }
       return { markdown: lines.join("\n\n"), ...(error === undefined ? {} : { error }) };
     },
-    [basket, id, queued, repoId],
+    [basket, from, id, queued, repoId],
   );
 
   const resolve = useCallback(
-    (src: string) => resolveImageSrc(src, { repoId, ...(id === undefined ? {} : { id }), pending: urls }),
-    [id, repoId, urls],
+    (src: string) =>
+      resolveImageSrc(src, {
+        repoId,
+        ...(id === undefined ? {} : { id }),
+        ...(from === undefined ? {} : { from }),
+        pending: urls,
+      }),
+    [from, id, repoId, urls],
   );
 
   /** Basket edits for the pending images still referenced by `text`; unreferenced ones are dropped. */
@@ -211,7 +246,8 @@ export function useImageAttachments({ repoId, id }: { repoId: string; id?: strin
     (target: string, text: string): AttachmentEdit[] => {
       const kept: AttachmentEdit[] = [];
       for (const image of pendingRef.current) {
-        if (!text.includes(`(${image.path})`)) {
+        const ref = from === undefined ? image.path : docAssetRef(from, image.path);
+        if (!text.includes(`(${ref})`)) {
           void deleteImage(image.key);
           continue;
         }
@@ -229,7 +265,7 @@ export function useImageAttachments({ repoId, id }: { repoId: string; id?: strin
       setPending([]);
       return kept;
     },
-    [],
+    [from],
   );
 
   /** Forget pending images (cancel). Their bytes are deleted. */

@@ -99,3 +99,31 @@ export function groupDocs(files: readonly string[], initiativeFile = "initiative
       return phase === undefined ? { path, kind, formats, title } : { path, kind, formats, title, phase };
     });
 }
+
+/** Longest document path (relative to the initiative folder) an edit may name. */
+export const MAX_DOC_PATH_LENGTH = 300;
+
+const INITIATIVE_FILE = "initiative.md";
+
+/**
+ * Shape of a markdown document the board may edit (`setDoc`), relative to the initiative
+ * folder: a document path (`isDocFile`) or a report (`reports/<name>.md`, one folder deep),
+ * always `.md`, never the initiative file. Only the shape: the server also requires the file
+ * to be listed for the initiative at the target ref.
+ */
+export function isEditableDocPath(relative: string): boolean {
+  if (relative.length === 0 || relative.length > MAX_DOC_PATH_LENGTH || !relative.endsWith(".md")) return false;
+  if (relative.toLowerCase() === INITIATIVE_FILE) return false;
+  if (relative.startsWith("reports/")) {
+    const rest = relative.slice("reports/".length).split("/");
+    return rest.length >= 1 && rest.length <= 2 && rest.every((part) => SEGMENT.test(part) && !part.includes(".."));
+  }
+  return isDocFile(relative);
+}
+
+/** Where `createDoc` may add a file: `<name>.md` at the top of the initiative folder or `phases/<name>.md`. */
+export function isNewDocPath(relative: string): boolean {
+  if (!isEditableDocPath(relative)) return false;
+  const parts = relative.split("/");
+  return parts.length === 1 || (parts.length === 2 && parts[0] === "phases");
+}

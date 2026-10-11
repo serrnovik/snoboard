@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import {
@@ -5,8 +6,12 @@ import {
   blockedChain,
   bodyHash,
   detectImageType,
+  docHash,
+  isEditableDocPath,
   isValidBranchName,
   MAX_ATTACHMENT_BYTES,
+  MAX_DOC_BYTES,
+  MAX_DOC_EDIT_LENGTH,
   MAX_SUBMIT_BODY_BYTES,
   type Config,
   type Snapshot,
@@ -26,6 +31,8 @@ import {
   allowSubmit,
   chooseSubmitCredential,
   csrfMatches,
+  isEditableDocFilePath,
+  isEditablePath,
   issueCsrfToken,
   lockSubmit,
   logSubmit,
@@ -413,12 +420,47 @@ api.get("/repos/:repo/initiatives/:id/docs/*", (c) => {
   return initiativeReportResponse(c, c.req.param("repo"), relative, lookupDocument);
 });
 
+/**
+ * Markdown source of a listed document for the editor: `{ text, hash }`, where `hash` is the
+ * sha256 of the whole file (the `fromHash` of `setDoc`). Only `.md` documents and reports the
+ * snapshot listed, never the initiative file; files over the edit limit answer 422.
+ */
+api.get("/repos/:repo/initiatives/:id/doc-source/*", async (c) => {
+  const repoId = c.req.param("repo");
+  if (!isKnownRepo(repoId)) return c.json({ error: "not found" }, 404);
+  const relative = docPathFromUrl(c.req.path, "/doc-source/");
+  if (relative === undefined || !isEditableDocPath(relative)) return c.json({ error: "not found" }, 404);
+  const view = await resolveView(c, repoId);
+  if (!view.ok) return viewError(c, view);
+  const snapshot = view.snapshot;
+  const config = getConfig(repoId);
+  if (snapshot === null || config === null) return notReadyJson(c, repoId);
+  if (relative === config.file) return c.json({ error: "not found" }, 404);
+  const item = snapshot.items.find((entry) => entry.id === c.req.param("id"));
+  if (item === undefined) return c.json({ error: "not found" }, 404);
+  const found = lookupDocument(snapshot, item, relative);
+  if (!found.ok || found.kind !== "md") return c.json({ error: "not found" }, 404);
+  const repoDir = initiativeRepoDir(repoId);
+  if (repoDir === undefined) return c.json({ error: "snapshot not ready" }, 503);
+  const bytes = await readCommittedBytes(repoDir, found.sha, found.path, MAX_DOC_BYTES).catch(() => undefined);
+  if (bytes === undefined) return c.json({ error: "not found" }, 404);
+  const text = bytes.toString("utf8");
+  if (text.length > MAX_DOC_EDIT_LENGTH) {
+    return c.json(
+      { code: "too_large", error: `${relative} is too large to edit in the board (over ${MAX_DOC_EDIT_LENGTH} characters)` },
+      422,
+    );
+  }
+  c.header("Cache-Control", "private, no-store");
+  return c.json({ text: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text, hash: docHash(text) });
+});
+
 /** `.../docs/phases/phase-1.packet.md` -> `phases/phase-1.packet.md`; undefined on bad encoding or empty/dot segments. */
-export function docPathFromUrl(urlPath: string): string | undefined {
-  const marker = urlPath.indexOf("/docs/");
+export function docPathFromUrl(urlPath: string, prefix = "/docs/"): string | undefined {
+  const marker = urlPath.indexOf(prefix);
   if (marker === -1) return undefined;
   const parts: string[] = [];
-  for (const raw of urlPath.slice(marker + "/docs/".length).split("/")) {
+  for (const raw of urlPath.slice(marker + prefix.length).split("/")) {
     let part: string;
     try {
       part = decodeURIComponent(raw);
@@ -970,8 +1012,20 @@ function readerFor(repoDir: string | undefined, config: Config): ReadBlob {
       pending = readRepoBlobs(repoDir, ref, config);
       cache.set(ref, pending);
     }
-    return (await pending).get(filePath);
+    const found = (await pending).get(filePath);
+    if (found !== undefined || isEditablePath(filePath, config) || !isEditableDocFilePath(filePath, config)) return found;
+    // A document of the initiative folder (setDoc / createDoc): read just that blob.
+    const bytes = await readCommittedBytes(repoDir, ref, filePath, MAX_DOC_BYTES).catch(() => undefined);
+    if (bytes === undefined) return undefined;
+    return { sha: gitBlobSha(bytes), text: bytes.toString("utf8") };
   };
+}
+
+/** Git's object id for a blob with these bytes (`git hash-object`). */
+export function gitBlobSha(bytes: Uint8Array): string {
+  return createHash("sha1")
+    .update(Buffer.concat([Buffer.from(`blob ${bytes.length}`, "utf8"), Buffer.from([0]), bytes]))
+    .digest("hex");
 }
 
 function utcToday(now = new Date()): string {
