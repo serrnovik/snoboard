@@ -31,6 +31,17 @@ untrusted. Assets: the viewer's session on the board, and the viewer's privacy (
 | Unauthenticated access | Same sign-in as the board API; every answer has `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. |
 | Resource use | Listing reads trees only (no blobs). One blob is read per request, at most 2 MB per report and 5 MB per image (size checked with `git cat-file -s` before reading). At most 200 reports and 300 documents per initiative are listed (and at most 1000 raw document files per folder are kept while walking the tree). |
 
+### Mermaid diagrams
+
+```` ```mermaid ```` blocks in initiative text, documents and reports are written by anyone who can push, so they are untrusted.
+
+| Threat | Control |
+| --- | --- |
+| Script or HTML through a diagram | The diagram is taken from the sanitized markdown tree at the code-block component (`pre` > `code.language-mermaid`); `rehype-sanitize` and the "no raw HTML" rule stay in place for everything else, and user HTML is never allowed through as SVG. Mermaid runs with `startOnLoad: false`, `securityLevel: "strict"` (labels sanitized, click callbacks and links disabled) and `htmlLabels: false`. The settings `securityLevel`, `htmlLabels`, `theme`, `themeCSS`, `themeVariables`, `fontFamily`, `maxTextSize` and similar are in mermaid's `secure` list, so a diagram's `%%{init}%%` directive or front matter cannot change them. |
+| Unsafe SVG output | Only the SVG returned by `mermaid.render` is inserted. Before that it is parsed in an inert `<template>` and `script`, `iframe`, `object`, `embed`, `img`, `image`, `audio` and `video` elements, `on*` attributes, every `href` that is not a `#fragment`, and CSS `@import` / non-fragment `url(...)` are removed. |
+| Tracking loads | The hardening above leaves no remote URL in the SVG; mermaid itself is bundled with the board, never loaded from a CDN. |
+| Resource use | Mermaid's default `maxTextSize` and `maxEdges` limits apply. Diagrams render one at a time in the browser; the server never renders them. |
+
 ### Icons
 
 Project icons come from `.snoboard.yml`, initiative icons from frontmatter; both are written by anyone who can push.

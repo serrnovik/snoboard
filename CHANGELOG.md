@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Render ```` ```mermaid ```` blocks as diagrams in the document viewer, the markdown editor preview and the details
+  panel. Mermaid (`mermaid` 12.1.0, board only) is imported lazily the first time a diagram is on the page, so the main
+  bundle stays the same size (+1.4 KB gzip for the code-block handling) and the server bundle never references it;
+  until it loads (and during SSR) the block shows as plain code. Rendering uses `securityLevel: "strict"`,
+  `htmlLabels: false` and a `secure` list that diagram directives cannot override, and the SVG is hardened again before
+  it is inserted. Diagrams follow the light/dark theme, have **Copy source** and **View larger** (zoomable dialog), and
+  a block that fails to parse shows its source with `diagram error: <message>`.
 - Edit initiative documents from the viewer: markdown documents (phase packets, task files, `ROADMAP.md`,
   `CONVENTIONS.md`, markdown reports) get an **Edit** button that opens the markdown editor and queues a new
   `setDoc { id, path, fromHash, to }` edit (path relative to the initiative folder, sha256 of the whole file, 60,000

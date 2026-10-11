@@ -1,6 +1,7 @@
 import type { AnchorHTMLAttributes, ImgHTMLAttributes, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
+import { MarkdownPre } from "@/components/mermaid-block";
 
 type MarkdownAnchorProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   node?: unknown;
@@ -70,7 +71,7 @@ export function SummaryMarkdown({
       <ReactMarkdown
         rehypePlugins={[rehypeSanitize]}
         urlTransform={(url, key) => (key === "src" ? (resolveImage?.(url) ?? "") : safeUrl(url))}
-        components={{ a: MarkdownLink, img: MarkdownImage }}
+        components={{ a: MarkdownLink, img: MarkdownImage, pre: MarkdownPre }}
       >
         {source}
       </ReactMarkdown>

@@ -221,6 +221,14 @@ Usage-based billing ships in three phases. Each phase has a packet with its scop
 | 2. Invoices | [phase 2 packet](phases/phase-2.packet.md) | in progress |
 | 3. Dunning | not written yet | planned |
 
+\`\`\`mermaid
+flowchart LR
+  meter[Daily seat meter] --> invoice[Monthly invoice]
+  invoice --> paid{Paid?}
+  paid -- yes --> receipt[Receipt]
+  paid -- no --> dunning[Dunning]
+\`\`\`
+
 ## Principles
 
 - Meter once a day, bill once a month.

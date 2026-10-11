@@ -12,6 +12,7 @@ import {
 import rehypeSanitize, { defaultSchema, type Options as SanitizeSchema } from "rehype-sanitize";
 import type { EditorImages } from "@/features/attachments/images";
 import type { MarkdownEditorProps } from "./markdown-editor";
+import { MarkdownPre } from "./mermaid-block";
 
 // Preview never renders raw HTML (skipHtml) and is sanitized after the editor's
 // own rehype plugins. Without `images`, <img> is dropped so the preview makes no
@@ -128,7 +129,7 @@ export default function MarkdownEditorImpl({
         return safeUrl(url);
       },
       rehypePlugins: [[rehypeSanitize, images === undefined ? NO_IMAGES_SCHEMA : IMAGES_SCHEMA]] as never,
-      components: { img: PreviewImage },
+      components: { img: PreviewImage, pre: MarkdownPre },
     }),
     [images],
   );

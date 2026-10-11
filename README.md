@@ -79,6 +79,11 @@ With editing on, markdown documents have an **Edit** button (queued in the baske
 **pending** until submitted), and **New doc** adds a missing phase packet from a template.
 See [docs/configuration.md](docs/configuration.md#documents).
 
+**Mermaid diagrams.** ```` ```mermaid ```` blocks (flowcharts, sequence and state diagrams, ...) render as diagrams in the
+document viewer, the markdown editor preview and the details panel, following the light or dark theme. Each diagram has
+**Copy source** and **View larger** (a zoomable dialog). A block mermaid cannot parse shows its source with the error.
+Mermaid is loaded only on pages that contain a diagram, in strict mode (see [SECURITY.md](SECURITY.md#mermaid-diagrams)).
+
 ![Document viewer with a phase packet](docs/img/docs.png)
 
 ### Editing basket

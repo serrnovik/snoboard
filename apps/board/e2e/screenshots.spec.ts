@@ -73,6 +73,17 @@ test("README screenshots", async ({ page }) => {
   const viewer = page.getByTestId("report-dialog");
   await expect(viewer.getByRole("heading", { name: "Billing roadmap" })).toBeVisible();
   await expect(viewer.getByTestId("doc-nav")).toBeVisible();
+  // The roadmap's mermaid flowchart renders as an SVG (strict mode), with a larger view.
+  const diagram = viewer.getByTestId("mermaid-diagram");
+  await expect(diagram.locator("svg")).toBeVisible();
+  await expect(diagram.locator("svg")).toContainText("Daily seat meter");
+  await expect(diagram.locator("script, foreignObject")).toHaveCount(0);
+  await viewer.getByRole("button", { name: "View diagram larger" }).click();
+  const large = page.getByTestId("mermaid-diagram-large");
+  await expect(large.locator("svg")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(large).toBeHidden();
+  await expect(viewer).toBeVisible();
   await viewer.getByRole("link", { name: "phase 1 packet" }).click();
   await expect(viewer.getByRole("heading", { name: "Phase 1 packet: Metering" })).toBeVisible();
   await expect(viewer.getByTestId("doc-nav-phases/phase-1.packet")).toHaveAttribute("aria-current", "page");

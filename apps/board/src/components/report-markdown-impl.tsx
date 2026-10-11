@@ -1,6 +1,7 @@
 import MDEditor from "@uiw/react-md-editor/nohighlight";
 import { useEffect, useMemo, useState, type AnchorHTMLAttributes, type ImgHTMLAttributes, type ReactNode } from "react";
 import rehypeSanitize, { defaultSchema, type Options as SanitizeSchema } from "rehype-sanitize";
+import { MarkdownPre } from "./mermaid-block";
 import type { ReportMarkdownProps } from "./report-markdown";
 
 // Same rules as the editor preview: raw HTML is skipped, the tree is sanitized, and every
@@ -41,6 +42,7 @@ export default function ReportMarkdownImpl({ markdown, resolveImage, renderLink 
   const components = useMemo(
     () => ({
       img: ReportImage,
+      pre: MarkdownPre,
       a: ({ node: _node, href, children }: AnchorProps) => renderLink(href ?? "", children),
     }),
     [renderLink],

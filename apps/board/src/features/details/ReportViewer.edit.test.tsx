@@ -21,6 +21,14 @@ vi.mock("@/components/markdown-editor-impl", () => ({
 }));
 
 const HASH = "cd".repeat(32);
+
+// The editor first renders a plain fallback textarea and swaps in the (mocked) editor after
+// mount; wait for the editor so changes are not fired at the fallback that is going away.
+async function editorTextbox(dialog: HTMLElement, name: string): Promise<HTMLTextAreaElement> {
+  const editor = await within(dialog).findByTestId("markdown-editor");
+  expect(editor.getAttribute("aria-label")).toBe(name);
+  return editor as HTMLTextAreaElement;
+}
 const ROADMAP = "# Roadmap\n\nCommitted plan.\n";
 
 const docs: DocEntry[] = [
@@ -108,7 +116,7 @@ describe("document editing in the viewer", () => {
     const dialog = await screen.findByTestId("report-dialog");
     await waitFor(() => expect(within(dialog).getByTestId("doc-content").textContent).toContain("Committed plan."), { timeout: 3000 });
     await user.click(await within(dialog).findByTestId("doc-edit"));
-    const editor = (await within(dialog).findByRole("textbox", { name: "Edit ROADMAP.md" })) as HTMLTextAreaElement;
+    const editor = await editorTextbox(dialog, "Edit ROADMAP.md");
     await waitFor(() => expect(editor.value).toBe(ROADMAP));
 
     // Cancel leaves the basket alone.
@@ -117,7 +125,7 @@ describe("document editing in the viewer", () => {
     await within(dialog).findByText("Committed plan.");
 
     await user.click(within(dialog).getByTestId("doc-edit"));
-    const again = (await within(dialog).findByRole("textbox", { name: "Edit ROADMAP.md" })) as HTMLTextAreaElement;
+    const again = await editorTextbox(dialog, "Edit ROADMAP.md");
     await waitFor(() => expect(again.value).toBe(ROADMAP));
     fireEvent.change(again, { target: { value: "# Roadmap\n\nEdited plan.\n" } });
     await user.click(within(dialog).getByTestId("doc-edit-save"));
@@ -136,7 +144,7 @@ describe("document editing in the viewer", () => {
 
     // Editing again starts from the pending text and keeps the first hash.
     await user.click(within(dialog).getByTestId("doc-edit"));
-    const third = (await within(dialog).findByRole("textbox", { name: "Edit ROADMAP.md" })) as HTMLTextAreaElement;
+    const third = await editorTextbox(dialog, "Edit ROADMAP.md");
     expect(third.value).toBe("# Roadmap\n\nEdited plan.\n");
     fireEvent.change(third, { target: { value: "# Roadmap\n\nFinal plan.\n" } });
     await user.click(within(dialog).getByTestId("doc-edit-save"));
