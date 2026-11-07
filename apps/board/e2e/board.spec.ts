@@ -103,6 +103,22 @@ test("password login walks the board, details, and graph", async ({ page }) => {
   await expect(page.getByLabel("Password")).toBeVisible();
 });
 
+test("opening a document puts it in the URL so a shared link reopens it", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Password").fill(E2E_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByTestId("card-acme-002")).toBeVisible({ timeout: 30_000 });
+
+  await page.goto("/?open=acme-002");
+  await page.getByRole("dialog").getByTestId("doc-open-ROADMAP").click();
+  await expect(page).toHaveURL(/doc=ROADMAP/);
+  const viewer = page.getByTestId("report-dialog");
+  await expect(viewer.getByRole("heading", { name: "Billing roadmap" })).toBeVisible();
+
+  await page.goto("/?open=acme-002&doc=ROADMAP");
+  await expect(page.getByTestId("report-dialog").getByRole("heading", { name: "Billing roadmap" })).toBeVisible();
+});
+
 test("demo repo shows issue refs on the card and in details", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Password").fill(E2E_PASSWORD);

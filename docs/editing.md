@@ -68,9 +68,14 @@ characters, `https:` or `mailto:` URL) and queues one `setLinks` edit. See [sche
 
 ## Documents
 
-The document viewer (phase packets, task files, `ROADMAP.md`, `CONVENTIONS.md`, markdown reports, ...) shows an
-**Edit** button on markdown documents when editing is on. It opens the same markdown editor as **Edit text**;
-**Save** queues a `setDoc` edit in the basket and **Cancel** drops the draft. HTML documents are never editable.
+The document viewer (phase packets, task files, `ROADMAP.md`, `CONVENTIONS.md`, markdown reports, ...) keeps the
+open file in the address bar: `?doc=<path>` (`ROADMAP`, `phases/phase-1.packet`, `reports/final.report`),
+`?format=html` when the HTML twin is showing, and `#heading` for an in-document anchor. Copy that URL to land on
+the same document. Closing the viewer, or opening another initiative, drops `?doc=`.
+
+The viewer shows an **Edit** button on markdown documents when editing is on. It opens the same markdown editor as
+**Edit text**; **Save** queues a `setDoc` edit in the basket and **Cancel** drops the draft. HTML documents are never
+editable.
 
 - The editor loads the committed text from `GET /api/repos/<repo>/initiatives/<id>/doc-source/<path>` (honours
   `?ref=`), which also returns the sha256 of the whole file. That hash is the edit's `fromHash`: if the file changed on

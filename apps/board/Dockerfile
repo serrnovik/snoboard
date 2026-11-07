@@ -6,7 +6,7 @@ FROM node:24.18.0-slim AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src
 
-RUN corepack enable && corepack prepare pnpm@11.17.0 --activate
+RUN corepack enable && corepack prepare pnpm@11.28.5 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/core/package.json packages/core/package.json

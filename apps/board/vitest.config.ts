@@ -19,5 +19,8 @@ export default defineConfig({
     fileParallelism: false,
     // Server tests build real git repos; 5s is too tight on a loaded machine (as in packages/core).
     testTimeout: 20_000,
+    // Hooks create and remove those same repos, so they get the same bound
+    // (the 10s default timed out an afterEach that only deletes fixtures).
+    hookTimeout: 20_000,
   },
 });

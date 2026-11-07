@@ -31,6 +31,7 @@ import {
   type DocFormat,
   type ViewerDoc,
 } from "./doc-links.js";
+import { currentOpenDoc, documentHref, setOpenDoc } from "./open.js";
 
 type ReportItem = Pick<BoardItem, "id" | "path" | "sourceRef" | "reports" | "docs" | "phases">;
 
@@ -50,7 +51,43 @@ export type ReportSelection = { index: number; format: DocFormat; anchor?: strin
 const chipClass =
   "inline-flex max-w-full items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
 
-/** A button that opens one report in the dialog. */
+function DocOpenLink({
+  docKey,
+  testId,
+  className,
+  title,
+  current,
+  onOpen,
+  children,
+}: {
+  docKey: string;
+  testId: string;
+  className: string;
+  title?: string;
+  current?: boolean;
+  onOpen: (key: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={documentHref(docKey)}
+      data-testid={testId}
+      data-vike="false"
+      title={title}
+      className={className}
+      aria-current={current === true ? "page" : undefined}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        onOpen(docKey);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/** A link that opens one report in the dialog. */
 export function ReportChip({
   report,
   label,
@@ -60,17 +97,18 @@ export function ReportChip({
   label: string;
   onOpen: (key: string) => void;
 }) {
+  const key = `reports/${report.name}`;
   return (
-    <button
-      type="button"
+    <DocOpenLink
+      docKey={key}
       className={chipClass}
-      data-testid={`report-chip-${report.name}`}
+      testId={`report-chip-${report.name}`}
       title={`${report.name} (${report.formats.join(", ")})`}
-      onClick={() => onOpen(`reports/${report.name}`)}
+      onOpen={onOpen}
     >
       <FileText aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{label}</span>
-    </button>
+    </DocOpenLink>
   );
 }
 
@@ -89,17 +127,17 @@ export function PhaseDocChips({
   const files = docs.filter((doc) => doc.kind !== "task");
   const tasks = docs.filter((doc) => doc.kind === "task");
   const chip = (doc: DocEntry) => (
-    <button
+    <DocOpenLink
       key={doc.path}
-      type="button"
+      docKey={doc.path}
       className={chipClass}
-      data-testid={`doc-chip-${doc.path}`}
+      testId={`doc-chip-${doc.path}`}
       title={`${doc.path} (${doc.formats.join(", ")})`}
-      onClick={() => onOpen(doc.path)}
+      onOpen={onOpen}
     >
       <FileText aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{docChipLabel(doc)}</span>
-    </button>
+    </DocOpenLink>
   );
   return (
     <span className="mt-1 flex flex-col gap-1" data-testid={`phase-docs-${phase}`}>
@@ -408,17 +446,17 @@ function DocNav({
               const queued = doc.formats.includes("md") ? pending.get(`${doc.key}.md`) : undefined;
               return (
                 <li key={doc.key}>
-                  <button
-                    type="button"
-                    data-testid={`doc-nav-${doc.key}`}
-                    aria-current={entryIndex === index ? "page" : undefined}
+                  <DocOpenLink
+                    docKey={doc.key}
+                    testId={`doc-nav-${doc.key}`}
                     title={doc.key}
-                    onClick={() => onOpen(entryIndex)}
+                    current={entryIndex === index}
+                    onOpen={() => onOpen(entryIndex)}
                     className={`flex w-full min-w-0 items-center gap-1 rounded-md px-2 py-1 text-left font-mono hover:bg-muted aria-[current=page]:bg-muted aria-[current=page]:font-medium ${doc.kind === "task" ? "pl-5" : ""}`}
                   >
                     <span className="truncate">{doc.kind === "report" ? doc.key.slice("reports/".length) : doc.title}</span>
                     {queued !== undefined ? <PendingBadge testId={`doc-pending-${doc.key}`} created={queued.created} /> : null}
-                  </button>
+                  </DocOpenLink>
                 </li>
               );
             })}
@@ -708,6 +746,8 @@ function MarkdownDoc({
             onClick={(event) => {
               event.preventDefault();
               scrollToAnchor(root.current, target.id);
+              const index = docs.findIndex((entry) => entry.key === doc.key);
+              if (index !== -1) onSelect({ index, format: "md", anchor: target.id });
             }}
           >
             {children}
@@ -743,19 +783,57 @@ function MarkdownDoc({
   );
 }
 
+function readViewerAddress(): { search: string; hash: string } {
+  if (typeof window === "undefined") return { search: "", hash: "" };
+  return { search: window.location.search, hash: window.location.hash };
+}
+
+function selectionFromUrl(docs: readonly ViewerDoc[], search: string, hash: string): ReportSelection | null {
+  const open = currentOpenDoc(search, hash);
+  if (open === null) return null;
+  const index = docs.findIndex((entry) => entry.key === open.key);
+  const doc = docs[index];
+  if (doc === undefined) return null;
+  const format = doc.formats.includes(open.format) ? open.format : defaultDocFormat(doc);
+  return open.anchor === undefined ? { index, format } : { index, format, anchor: open.anchor };
+}
+
 /**
- * State of the document viewer. `openDoc` takes a key from `viewerDocs` (`ROADMAP`,
- * `phases/phase-1.packet`, `reports/final.report`).
+ * State of the document viewer, kept in `?doc=` so the address bar is a shareable link.
+ * `openDoc` takes a key from `viewerDocs` (`ROADMAP`, `phases/phase-1.packet`, `reports/final.report`).
  */
 export function useReportViewer(committedItem: ReportItem) {
-  const [selection, setSelection] = useState<ReportSelection | null>(null);
+  const [address, setAddress] = useState(readViewerAddress);
   // Same list as the dialog, including documents created in the basket, so indices agree.
   const { item } = usePendingDocs(committedItem, useRepoId());
   const docs = viewerDocs(item);
+  useEffect(() => {
+    const sync = () => setAddress(readViewerAddress());
+    window.addEventListener("popstate", sync);
+    window.addEventListener("hashchange", sync);
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("hashchange", sync);
+    };
+  }, []);
+  const selection = selectionFromUrl(docs, address.search, address.hash);
+  const setSelection = (next: ReportSelection | null) => {
+    if (next === null) {
+      setOpenDoc(null);
+      return;
+    }
+    const doc = docs[next.index];
+    if (doc === undefined) return;
+    setOpenDoc({
+      key: doc.key,
+      format: next.format,
+      ...(next.anchor === undefined ? {} : { anchor: next.anchor }),
+    });
+  };
   const openDoc = (key: string) => {
     const index = docs.findIndex((entry) => entry.key === key);
     const doc = docs[index];
-    if (doc !== undefined) setSelection({ index, format: defaultDocFormat(doc) });
+    if (doc !== undefined) setOpenDoc({ key, format: defaultDocFormat(doc) });
   };
   return { selection, setSelection, openDoc };
 }
@@ -769,15 +847,15 @@ export function DocumentsSection({ docs, onOpen }: { docs: readonly DocEntry[]; 
       <ul className="flex flex-col gap-1 text-sm">
         {docs.map((doc) => (
           <li key={doc.path} className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              data-testid={`doc-open-${doc.path}`}
-              onClick={() => onOpen(doc.path)}
+            <DocOpenLink
+              docKey={doc.path}
+              testId={`doc-open-${doc.path}`}
+              onOpen={onOpen}
               className="inline-flex min-w-0 items-center gap-1 text-left text-primary underline-offset-4 hover:underline"
             >
               <FileText aria-hidden="true" className="size-3.5 shrink-0" />
               <span className="truncate font-mono text-xs">{doc.path}</span>
-            </button>
+            </DocOpenLink>
             <span className="text-xs text-muted-foreground">{doc.formats.join(" · ")}</span>
           </li>
         ))}
@@ -800,15 +878,15 @@ export function ReportsSection({
       <ul className="flex flex-col gap-1 text-sm">
         {reports.map((report) => (
           <li key={report.name} className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              data-testid={`report-open-${report.name}`}
-              onClick={() => onOpen(`reports/${report.name}`)}
+            <DocOpenLink
+              docKey={`reports/${report.name}`}
+              testId={`report-open-${report.name}`}
+              onOpen={onOpen}
               className="inline-flex min-w-0 items-center gap-1 text-left text-primary underline-offset-4 hover:underline"
             >
               <FileText aria-hidden="true" className="size-3.5 shrink-0" />
               <span className="truncate font-mono text-xs">{report.name}</span>
-            </button>
+            </DocOpenLink>
             <span className="text-xs text-muted-foreground">{report.formats.join(" · ")}</span>
           </li>
         ))}

@@ -63,8 +63,10 @@ in graph nodes and in the project pickers, which also count open initiatives per
 
 Files under `<initiative folder>/reports/` (`phase-1.report.md`, `final.report.md` and their `.report.html` twins)
 show in the details panel: initiative reports in a **Reports** section, phase reports as chips on their phase, and a
-"N reports" mark on the card. They open in a large viewer with previous/next and an md/html switch. HTML reports
-render statically in a sandbox, without scripts. See [docs/configuration.md](docs/configuration.md#reports).
+"N reports" mark on the card. They open in a large viewer with previous/next and an md/html switch. Opening a document
+writes `?doc=` (and `?format=html` when the HTML twin is showing) into the address bar, so the URL
+reopens that same viewer. HTML reports render statically in a sandbox, without scripts. See
+[docs/configuration.md](docs/configuration.md#reports).
 
 ![Report viewer with a markdown report](docs/img/reports.png)
 

@@ -114,6 +114,8 @@ export interface CliIo {
   cwd: string;
   /** Observes git argv (without the leading `git`) for tests. */
   onGit?: (args: readonly string[]) => void;
+  /** Clock for `updated` dates and the stale window; defaults to the system clock. */
+  now?: () => Date;
 }
 
 class CommandError extends Error {
@@ -169,7 +171,7 @@ export async function main(argv: readonly string[], io?: Partial<CliIo>): Promis
   const stdout = io?.stdout ?? ((text: string) => process.stdout.write(text));
   const stderr = io?.stderr ?? ((text: string) => process.stderr.write(text));
   const cwd = io?.cwd ?? process.cwd();
-  const full: CliIo = { stdout, stderr, cwd, onGit: io?.onGit };
+  const full: CliIo = { stdout, stderr, cwd, onGit: io?.onGit, now: io?.now };
   try {
     return await run(argv, full);
   } catch (error) {
@@ -290,7 +292,7 @@ async function validateCommand(values: FlagValues, io: CliIo): Promise<number> {
       ? await readAtRef(repoDir, values.ref, config)
       : await readWorkingTree(repoDir, config);
   files.sort((left, right) => left.path.localeCompare(right.path));
-  let issues = validate(files, config);
+  let issues = validate(files, config, { now: io.now?.() });
   if (values.ref === undefined) issues.push(...(await iconFileIssues(repoDir, files, config)));
   const changedSince = values["changed-since"];
   if (changedSince !== undefined) {
@@ -441,7 +443,7 @@ async function newCommand(
     config.statuses.find((item) => !config.doneStatuses.includes(item)) ?? config.statuses[0];
   if (status === undefined) throw new CommandError("Config has no statuses.");
   const id = config.idFormat.replaceAll("{project}", project).replaceAll("{number}", number);
-  const updated = new Date().toISOString().slice(0, 10);
+  const updated = (io.now?.() ?? new Date()).toISOString().slice(0, 10);
   const body = renderTemplate(await readTemplate(), {
     id,
     title,
@@ -468,7 +470,7 @@ async function statusCommand(values: FlagValues, io: CliIo): Promise<number> {
   for (const error of snapshot.errors) {
     io.stderr(`${error.path} (${error.ref}): ${error.message}\n`);
   }
-  const stalePaths = staleInitiativePaths(snapshot.items, config);
+  const stalePaths = staleInitiativePaths(snapshot.items, config, io.now?.());
   let items = snapshot.items;
   if (project !== undefined) items = items.filter((item) => item.project === project);
   if (values.ready === true) items = items.filter((item) => item.isReady);
@@ -508,7 +510,11 @@ function statusRecord(item: BoardItem, stale: boolean) {
   };
 }
 
-function staleInitiativePaths(items: readonly BoardItem[], config: Config): Set<string> {
+function staleInitiativePaths(
+  items: readonly BoardItem[],
+  config: Config,
+  now: Date | undefined,
+): Set<string> {
   const parsed: ParsedFile[] = items.map((item) => ({
     kind: "initiative",
     path: item.path,
@@ -518,7 +524,7 @@ function staleInitiativePaths(items: readonly BoardItem[], config: Config): Set<
     summary: item.summary,
   }));
   const stale = new Set<string>();
-  for (const issue of validate(parsed, config)) {
+  for (const issue of validate(parsed, config, { now })) {
     if (issue.severity === "warning" && issue.field === "updated") stale.add(issue.path);
   }
   return stale;

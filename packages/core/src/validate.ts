@@ -44,7 +44,7 @@ function dependencyFound(
 export function validate(
   files: readonly ParsedFile[],
   config: Config,
-  opts?: { knownIds?: Set<string> },
+  opts?: { knownIds?: Set<string>; now?: Date },
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const initiatives = files.filter((file): file is InitiativeFile => file.kind === "initiative");
@@ -227,7 +227,7 @@ export function validate(
     });
   }
 
-  const today = new Date();
+  const today = opts?.now ?? new Date();
   const todayNumber = utcDay(today.getUTCFullYear(), today.getUTCMonth() + 1, today.getUTCDate());
   for (const file of initiatives) {
     const status = file.frontmatter.status;

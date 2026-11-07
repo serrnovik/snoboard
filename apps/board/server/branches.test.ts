@@ -121,7 +121,10 @@ describe("git branch source", () => {
     git(origin.dir, ["config", "uploadpack.allowFilter", "true"]);
     git(origin.dir, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
     const parent = await mkdtemp(path.join(os.tmpdir(), "snoboard-clone-"));
-    cleanups.push(() => rm(parent, { recursive: true, force: true }));
+    // Git instrumentation may add `.git/ai` log files while a temporary
+    // repository is being removed. Retry transient ENOTEMPTY races, but still
+    // fail the test if cleanup does not succeed after the bounded retries.
+    cleanups.push(() => rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
     cloneDir = path.join(parent, "repo");
     git(parent, ["clone", "--filter=blob:none", "--no-checkout", "--single-branch", pathToFileURL(origin.dir).href, cloneDir]);
     config = loadConfig();

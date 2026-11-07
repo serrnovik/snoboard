@@ -132,16 +132,21 @@ describe("layoutGraph", () => {
       hideDone: true,
       doneStatuses: DONE_STATUSES,
     };
-    layoutGraph(items, options);
-
-    const started = performance.now();
-    const layout = layoutGraph(items, options);
-    const elapsed = performance.now() - started;
+    // Best of several runs: one wall-clock sample on a CPU-throttled CI pod
+    // measured scheduler stalls, not the layout (pipeline 6956: 270 ms). A real
+    // regression is slow on every run, so the fastest one still catches it.
+    let layout = layoutGraph(items, options); // warm-up
+    let fastest = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 5; run += 1) {
+      const started = performance.now();
+      layout = layoutGraph(items, options);
+      fastest = Math.min(fastest, performance.now() - started);
+    }
 
     expect(layout.nodes).toHaveLength(150);
     expect(layout.edges).toHaveLength(149);
     expect(xOf(layout.nodes, "item-001")).toBeLessThan(xOf(layout.nodes, "item-150"));
-    expect(elapsed).toBeLessThan(200);
+    expect(fastest).toBeLessThan(200);
   });
 });
 

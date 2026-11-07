@@ -28,5 +28,15 @@ describe("qualified ids", () => {
     expect(initiativeDetailsPath("not a repo", "billing-004")).toBe(
       "/r/not%20a%20repo/initiatives/billing-004",
     );
+    expect(shareUrl("https://board.example", "acme", "billing-004", { key: "ROADMAP" })).toBe(
+      "https://board.example/r/acme/initiatives/billing-004?doc=ROADMAP",
+    );
+    expect(
+      shareUrl("https://board.example", "acme", "billing-004", {
+        key: "reports/final.report",
+        format: "html",
+        anchor: "later",
+      }),
+    ).toBe("https://board.example/r/acme/initiatives/billing-004?doc=reports%2Ffinal.report&format=html#later");
   });
 });

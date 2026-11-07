@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
+  "packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c",
   "engines": {
-    "node": ">=24.18.0",
-    "pnpm": ">=11.17.0"
+    "node": ">=24.21.0",
+    "pnpm": ">=12.10.1"
   },
   "scripts": {
     "build": "pnpm --filter \"./packages/*\" --filter \"./apps/*\" build",
-    "test": "pnpm --filter \"./packages/*\" --filter \"./apps/*\" test",
+    "test": "pnpm --workspace-concurrency=1 --filter \"./packages/*\" --filter \"./apps/*\" test",
     "typecheck": "pnpm --filter \"./packages/*\" --filter \"./apps/*\" typecheck",
     "e2e": "pnpm --filter snoboard build && pnpm --filter @snoboard/board build && pnpm --filter @snoboard/board e2e"
   }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `main()` accepts an injected clock (`CliIo.now`) and `validate()` an optional `now`, used for the stale window and
+  new-initiative `updated` dates; both default to the system clock. `pnpm test` runs the packages one at a time.
 - Agent bridge (optional, `SNOBOARD_AGENT_BRIDGE=true`): personal MCP tokens (Settings → Agent access, stored as
   SHA-256 hashes) and a Streamable HTTP MCP endpoint at `/mcp` with `list_repos`, `list_branches`, `list_initiatives`,
   `get_initiative`, `list_docs`, `read_doc`, `get_basket`, `propose_edits`, `set_doc_from_local`, `list_proposals` and

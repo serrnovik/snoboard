@@ -255,6 +255,9 @@ describe("snoboard cli", () => {
   });
 
   it("status --project and --stale filter the JSON list", async () => {
+    // The demo fixtures are dated 2026-09-29. Inject a clock a day later so the
+    // 30-day stale window is measured from a fixed point, not the wall clock.
+    const clock = { now: () => new Date("2026-09-30T12:00:00Z") };
     const dir = await initDemo();
     await replaceIn(
       dir,
@@ -263,14 +266,20 @@ describe("snoboard cli", () => {
       "updated: 2020-01-01",
     );
     await commitAll(dir, "stale reports");
-    const project = await run(["status", "--project", "acme", "--json", "--repo", dir]);
+    const project = await run(["status", "--project", "acme", "--json", "--repo", dir], clock);
     expect(ids(project.stdout)).toEqual(["acme-001", "acme-002", "acme-003"]);
-    const stale = await run(["status", "--stale", "--json", "--repo", dir]);
+    const stale = await run(["status", "--stale", "--json", "--repo", dir], clock);
     expect(stale.code).toBe(0);
     const rows = JSON.parse(stale.stdout) as Array<{ id: string; stale: boolean }>;
     expect(rows.map((row) => row.id)).toEqual(["acme-003"]);
     expect(rows[0]?.stale).toBe(true);
-    expect((await run(["status", "--ready", "--stale", "--repo", dir])).code).toBe(2);
+    expect((await run(["status", "--ready", "--stale", "--repo", dir], clock)).code).toBe(2);
+
+    // The same fixtures read a year later: every open initiative has aged out.
+    const later = await run(["status", "--stale", "--json", "--repo", dir], {
+      now: () => new Date("2027-09-30T12:00:00Z"),
+    });
+    expect(ids(later.stdout)).toEqual(["acme-002", "acme-003"]);
   });
 
   it("new acme search creates a folder that validate accepts", async () => {
@@ -307,7 +316,7 @@ function ids(stdout: string): string[] {
 
 async function run(
   args: readonly string[],
-  io?: Pick<CliIo, "onGit">,
+  io?: Partial<Pick<CliIo, "onGit" | "now">>,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
@@ -320,6 +329,7 @@ async function run(
       stderr += text;
     },
     onGit: io?.onGit,
+    now: io?.now,
   });
   return { code, stdout, stderr };
 }

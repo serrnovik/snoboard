@@ -100,10 +100,15 @@ export function legacyRedirectPath(
   return withSearch(`/r/${legacyRepoId}/initiatives/${encodeURIComponent(raw)}`, search);
 }
 
-/** `?open=<id>` names an initiative in the current repo, so a switch drops it and keeps the rest. */
+/**
+ * `?open=<id>` and `?doc=` name an initiative and document in the current repo, so a switch
+ * drops them (and `?format=` for the HTML twin) and keeps the rest.
+ */
 function searchForOtherRepo(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("open");
+  params.delete("doc");
+  params.delete("format");
   // A branch belongs to one repository; the next one opens on its own remembered branch.
   params.delete("ref");
   const rest = params.toString();

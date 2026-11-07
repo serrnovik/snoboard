@@ -23,7 +23,7 @@ import { phaseChipLabel, splitReports } from "./report-links.js";
 import { readLinks } from "./ListEditors";
 import { resolveImageSrc } from "@/features/attachments/images";
 import { isSafeLinkUrl } from "snoboard/browser";
-import { currentOpenId, goBackInDetails, initiativeIdOf, openStack, setOpenId } from "./open.js";
+import { currentOpenDoc, currentOpenId, goBackInDetails, initiativeIdOf, openStack, setOpenId } from "./open.js";
 import { useRepoId } from "@/features/repo/context";
 import { formatQualifiedId, initiativeDetailsPath, parseQualifiedId, shareUrl } from "@/lib/ids";
 import { boardPath, repoApi } from "@/lib/routes";
@@ -459,7 +459,7 @@ function CopyLink({ repoId, id }: { repoId: string; id: string }) {
       type="button"
       className={detailsLinkClass}
       onClick={() => {
-        void navigator.clipboard?.writeText(shareUrl(window.location.origin, repoId, id));
+        void navigator.clipboard?.writeText(shareUrl(window.location.origin, repoId, id, currentOpenDoc()));
       }}
     >
       Copy link

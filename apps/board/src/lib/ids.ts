@@ -30,6 +30,17 @@ export function initiativeDetailsPath(repo: string, id: string): string {
   return `/r/${parsed.repo}/initiatives/${encodeURIComponent(parsed.id)}`;
 }
 
-export function shareUrl(origin: string, repo: string, id: string): string {
-  return new URL(initiativeDetailsPath(repo, id), origin).toString();
+export function shareUrl(
+  origin: string,
+  repo: string,
+  id: string,
+  doc?: { key: string; format?: "md" | "html"; anchor?: string } | null,
+): string {
+  const url = new URL(initiativeDetailsPath(repo, id), origin);
+  if (doc != null) {
+    url.searchParams.set("doc", doc.key);
+    if (doc.format === "html") url.searchParams.set("format", "html");
+    if (doc.anchor !== undefined && doc.anchor.length > 0) url.hash = encodeURIComponent(doc.anchor);
+  }
+  return url.toString();
 }

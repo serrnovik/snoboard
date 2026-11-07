@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserLocation } from "@/features/board/sync";
-import { DetailsSheet } from "./DetailsSheet";
+import { DetailsSheet, InitiativePage } from "./DetailsSheet";
 import { HtmlReport } from "./ReportViewer";
 import {
   docChipLabel,
@@ -120,6 +120,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("report helpers", () => {
@@ -242,6 +243,7 @@ describe("report viewer", () => {
     expect(within(screen.getByTestId("phase-reports-2")).getByText("review-plan")).toBeTruthy();
 
     await user.click(screen.getByTestId("report-open-final.report"));
+    expect(window.location.search).toMatch(/doc=reports%2Ffinal\.report/);
     const dialog = await screen.findByTestId("report-dialog");
     await within(dialog).findByText("Final report", {}, { timeout: 5000 });
     expect(within(dialog).getByTestId("report-position").textContent).toBe("5 / 8");
@@ -259,9 +261,11 @@ describe("report viewer", () => {
     );
 
     await user.click(within(dialog).getByTestId("report-format-html"));
+    expect(window.location.search).toMatch(/format=html/);
     const frame = await within(dialog).findByTestId("report-frame");
     expect(frame.getAttribute("sandbox")).toBe("");
     await user.click(within(dialog).getByTestId("report-format-md"));
+    expect(window.location.search).not.toMatch(/format=/);
     await within(dialog).findByText("Final report");
 
     await user.click(within(dialog).getByRole("link", { name: "phase 1" }));
@@ -277,7 +281,28 @@ describe("report viewer", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByTestId("report-dialog")).toBeNull());
+    expect(window.location.search).not.toMatch(/doc=/);
     expect(screen.getByTestId("details-sheet")).toBeTruthy();
+  });
+
+  it("opens the viewer from ?doc= so a shared link lands on the same document", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => respond(String(input)));
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/r/default/?open=acme-002&doc=ROADMAP");
+    render(<DetailsSheet openId="acme-002" onOpenChange={() => {}} />);
+    const dialog = await screen.findByTestId("report-dialog");
+    await within(dialog).findByRole("heading", { name: "Roadmap" }, { timeout: 5000 });
+    expect(within(dialog).getByTestId("doc-nav-ROADMAP").getAttribute("aria-current")).toBe("page");
+    expect(within(dialog).getByTestId("doc-nav-ROADMAP").getAttribute("href")).toContain("doc=ROADMAP");
+  });
+
+  it("opens the viewer from ?doc= on the full initiative page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => respond(String(input)));
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/r/default/initiatives/acme-002?doc=ROADMAP");
+    render(<InitiativePage id="acme-002" />);
+    const dialog = await screen.findByTestId("report-dialog");
+    await within(dialog).findByRole("heading", { name: "Roadmap" }, { timeout: 5000 });
   });
 });
 
@@ -303,6 +328,7 @@ describe("document viewer", () => {
     expect(screen.queryByTestId("phase-docs-2")).toBeNull();
 
     await user.click(within(section).getByTestId("doc-open-ROADMAP"));
+    expect(window.location.search).toMatch(/doc=ROADMAP/);
     const dialog = await screen.findByTestId("report-dialog");
     await within(dialog).findByRole("heading", { name: "Roadmap" }, { timeout: 5000 });
     expect(within(dialog).getByTestId("report-position").textContent).toBe("2 / 8");

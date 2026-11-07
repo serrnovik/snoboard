@@ -38,10 +38,13 @@ describe("old URLs redirect", () => {
     expect(pathForRepoSwitch("/r/acme/initiatives/billing-004", "?open=1", "widgets")).toBe("/r/widgets/");
   });
 
-  it("drops ?open= on a repo switch and keeps the other query parameters", () => {
+  it("drops ?open=, ?doc= and ?format= on a repo switch and keeps the other query parameters", () => {
     expect(pathForRepoSwitch("/r/acme/", "?project=billing&open=acme-001&q=x", "widgets")).toBe(
       "/r/widgets/?project=billing&q=x",
     );
+    expect(
+      pathForRepoSwitch("/r/acme/", "?project=billing&open=acme-001&doc=ROADMAP&format=html&q=x", "widgets"),
+    ).toBe("/r/widgets/?project=billing&q=x");
     expect(pathForRepoSwitch("/r/acme/graph", "?open=acme-001", "widgets")).toBe("/r/widgets/graph");
     expect(pathForRepoSwitch("/", "?open=acme-001", "widgets")).toBe("/r/widgets/");
   });

@@ -103,6 +103,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
   resetBasketStore();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("document editing in the viewer", () => {
@@ -127,7 +128,12 @@ describe("document editing in the viewer", () => {
     await user.click(within(dialog).getByTestId("doc-edit"));
     const again = await editorTextbox(dialog, "Edit ROADMAP.md");
     await waitFor(() => expect(again.value).toBe(ROADMAP));
-    fireEvent.change(again, { target: { value: "# Roadmap\n\nEdited plan.\n" } });
+    expect(again.isConnected).toBe(true);
+    expect(again.disabled).toBe(false);
+    expect(screen.getAllByTestId("report-dialog")).toHaveLength(1);
+    const editedPlan = "# Roadmap\n\nEdited plan.\n";
+    fireEvent.change(again, { target: { value: editedPlan } });
+    await waitFor(() => expect(again.value).toBe(editedPlan));
     await user.click(within(dialog).getByTestId("doc-edit-save"));
 
     await waitFor(() =>
@@ -181,9 +187,7 @@ describe("document editing in the viewer", () => {
         { kind: "createDoc", id: "acme-002", path: "phases/phase-2.packet.md", to: template },
       ]),
     );
-    const editor = (await within(dialog).findByRole("textbox", {
-      name: "Edit phases/phase-2.packet.md",
-    })) as HTMLTextAreaElement;
+    const editor = await editorTextbox(dialog, "Edit phases/phase-2.packet.md");
     expect(editor.value).toBe(template);
     expect(within(dialog).getByTestId("doc-pending-phases/phase-2.packet").textContent).toBe("new");
     fireEvent.change(editor, { target: { value: "# Phase 2 packet\n\nBuild it.\n" } });
