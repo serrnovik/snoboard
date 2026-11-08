@@ -18,11 +18,13 @@ const BASE_HEADERS: Record<string, string> = {
 };
 
 /**
- * HTML reports render as static documents: no scripts (CSP plus `sandbox`), no network
- * (only inline styles and `data:` images), and only the board itself may frame them.
+ * HTML reports run inline scripts in a unique opaque origin (iframe `sandbox="allow-scripts"`
+ * without `allow-same-origin`, plus this CSP). They cannot read board cookies, call the API,
+ * or load the network — only inline scripts/styles and `data:` images. Do not add
+ * `allow-same-origin`: the file is served from the board origin.
  */
 export const HTML_REPORT_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; sandbox allow-scripts; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
 
 const MARKDOWN_REPORT_CSP = "default-src 'none'; sandbox";
 

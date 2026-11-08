@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- HTML reports and documents run their inline scripts in the viewer (`iframe sandbox="allow-scripts"`, never
+  `allow-same-origin`; CSP `script-src 'unsafe-inline'` with no network). Self-contained twins can fill tables,
+  filters and charts. The viewer has a widen control that stretches the dialog across most of the window.
 - `main()` accepts an injected clock (`CliIo.now`) and `validate()` an optional `now`, used for the stale window and
   new-initiative `updated` dates; both default to the system clock. `pnpm test` runs the packages one at a time.
 - Agent bridge (optional, `SNOBOARD_AGENT_BRIDGE=true`): personal MCP tokens (Settings → Agent access, stored as

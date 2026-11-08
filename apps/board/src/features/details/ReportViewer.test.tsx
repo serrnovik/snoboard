@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserLocation } from "@/features/board/sync";
 import { DetailsSheet, InitiativePage } from "./DetailsSheet";
-import { HtmlReport } from "./ReportViewer";
+import { HtmlReport, HTML_REPORT_SANDBOX } from "./ReportViewer";
 import {
   docChipLabel,
   docImageSrc,
@@ -218,11 +218,13 @@ describe("report helpers", () => {
 });
 
 describe("HTML reports", () => {
-  it("render in a sandboxed frame with no scripts and no same-origin access", () => {
+  it("render in a sandboxed frame with inline scripts and no same-origin access", () => {
     render(<HtmlReport src="/api/repos/default/initiatives/acme-002/reports/final.report.html" title="final" />);
     const frame = screen.getByTestId("report-frame");
     expect(frame.tagName).toBe("IFRAME");
-    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("sandbox")).toBe(HTML_REPORT_SANDBOX);
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(frame.hasAttribute("srcdoc")).toBe(false);
     expect(frame.getAttribute("src")).toBe("/api/repos/default/initiatives/acme-002/reports/final.report.html");
@@ -263,7 +265,13 @@ describe("report viewer", () => {
     await user.click(within(dialog).getByTestId("report-format-html"));
     expect(window.location.search).toMatch(/format=html/);
     const frame = await within(dialog).findByTestId("report-frame");
-    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(dialog.getAttribute("data-wide")).toBe("false");
+    await user.click(within(dialog).getByTestId("report-wide"));
+    expect(dialog.getAttribute("data-wide")).toBe("true");
+    await user.click(within(dialog).getByTestId("report-wide"));
+    expect(dialog.getAttribute("data-wide")).toBe("false");
     await user.click(within(dialog).getByTestId("report-format-md"));
     expect(window.location.search).not.toMatch(/format=/);
     await within(dialog).findByText("Final report");

@@ -1,4 +1,15 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FilePlus, FileText, ListChecks, Pencil } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  FilePlus,
+  FileText,
+  ListChecks,
+  Maximize2,
+  Minimize2,
+  Pencil,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isEditableDocPath, isNewDocPath, type BoardItem, type Edit } from "snoboard/browser";
 import { MarkdownEditor } from "@/components/markdown-editor";
@@ -168,7 +179,8 @@ export function PhaseDocChips({
 
 /**
  * Large document viewer: a navigation tree of the initiative's documents (Initiative, Phase N,
- * Reports) next to the content; markdown rendered by the board, HTML in a script-less sandboxed frame.
+ * Reports) next to the content; markdown rendered by the board, HTML in a sandboxed frame
+ * (`allow-scripts`, never `allow-same-origin`).
  * When editing is enabled, markdown documents get an "Edit" button that queues `setDoc` in the
  * basket; pending document edits render from the basket and are marked in the navigation.
  */
@@ -190,6 +202,7 @@ export function ReportDialog({
   const { pending, item } = usePendingDocs(committedItem, repoId);
   const docs = viewerDocs(item);
   const doc = selection === null ? undefined : docs[selection.index];
+  const [wide, setWide] = useState(false);
   return (
     <Dialog
       open={doc !== undefined}
@@ -199,7 +212,8 @@ export function ReportDialog({
     >
       <DialogContent
         data-testid="report-dialog"
-        className="flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none! flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(calc(100vw-2rem),1400px)]!"
+        data-wide={wide ? "true" : "false"}
+        className={`flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none! flex-col gap-0 overflow-hidden p-0 ${wide ? "sm:max-w-[calc(100vw-1rem)]!" : "sm:max-w-[min(calc(100vw-2rem),1400px)]!"}`}
         onKeyDown={(event) => {
           if (event.target instanceof HTMLElement && event.target.closest("input,textarea,select")) return;
           const index = selection?.index ?? 0;
@@ -220,6 +234,8 @@ export function ReportDialog({
             doc={doc}
             selection={selection}
             pending={pending}
+            wide={wide}
+            onToggleWide={() => setWide((value) => !value)}
             onSelect={onSelect}
           />
         ) : null}
@@ -236,6 +252,8 @@ function ViewerBody({
   doc,
   selection,
   pending,
+  wide,
+  onToggleWide,
   onSelect,
 }: {
   item: ReportItem;
@@ -245,6 +263,8 @@ function ViewerBody({
   doc: ViewerDoc;
   selection: ReportSelection;
   pending: PendingDocs;
+  wide: boolean;
+  onToggleWide: () => void;
   onSelect: (selection: ReportSelection) => void;
 }) {
   const editing = useEditConfig();
@@ -342,6 +362,17 @@ function ViewerBody({
             ))}
           </div>
         ) : null}
+        <button
+          type="button"
+          aria-label={wide ? "Use a narrower viewer" : "Widen the viewer"}
+          aria-pressed={wide}
+          data-testid="report-wide"
+          title={wide ? "Use a narrower viewer" : "Widen the viewer"}
+          onClick={onToggleWide}
+          className="rounded-md p-1 hover:bg-muted"
+        >
+          {wide ? <Minimize2 aria-hidden="true" className="size-4" /> : <Maximize2 aria-hidden="true" className="size-4" />}
+        </button>
         {canEdit && !isEditing ? (
           <Button type="button" variant="outline" size="sm" data-testid="doc-edit" onClick={() => setEditingKey(doc.key)}>
             <Pencil aria-hidden="true" className="size-3" />
@@ -621,16 +652,19 @@ function errorFrom(body: unknown, status: number): string {
 }
 
 /**
- * HTML twins render with no scripts, no same-origin access, no forms, no popups and no
- * top navigation: `sandbox=""` plus the endpoint's CSP (no network, inline styles only).
+ * HTML twins may run inline scripts. The frame is `allow-scripts` only — never
+ * `allow-same-origin` — so the document gets an opaque origin and cannot read board
+ * cookies, storage or the API. CSP on the endpoint still blocks network fetches.
  */
+export const HTML_REPORT_SANDBOX = "allow-scripts";
+
 export function HtmlReport({ src, title }: { src: string; title: string }) {
   return (
     <iframe
       data-testid="report-frame"
       src={src}
       title={title}
-      sandbox=""
+      sandbox={HTML_REPORT_SANDBOX}
       referrerPolicy="no-referrer"
       loading="lazy"
       className="h-full min-h-[60vh] w-full rounded-md border bg-white"

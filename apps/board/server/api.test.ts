@@ -557,9 +557,10 @@ describe("read-only API", () => {
       expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
       expect(page.headers.get("x-content-type-options")).toBe("nosniff");
       const csp = page.headers.get("content-security-policy") ?? "";
-      expect(csp).toContain("default-src 'none'; style-src 'unsafe-inline'; img-src data:");
-      expect(csp).toContain("sandbox");
-      expect(csp).not.toContain("script-src");
+      expect(csp).toContain("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:");
+      expect(csp).toContain("sandbox allow-scripts");
+      expect(csp).not.toContain("allow-same-origin");
+      expect(csp).not.toContain("unsafe-eval");
       expect(await page.text()).toBe(html);
 
       const nested = await app.request(`${base}/review/plan.md`, authed());
@@ -651,8 +652,9 @@ describe("read-only API", () => {
       expect(page.status).toBe(200);
       expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
       const csp = page.headers.get("content-security-policy") ?? "";
-      expect(csp).toContain("sandbox");
-      expect(csp).not.toContain("script-src");
+      expect(csp).toContain("sandbox allow-scripts");
+      expect(csp).toContain("script-src 'unsafe-inline'");
+      expect(csp).not.toContain("allow-same-origin");
 
       expect((await app.request(`${base}/phases/phase-1.packet.md`, authed())).status).toBe(200);
       expect((await app.request(`${base}/phases/phase-1/T1.1-schema.md`, authed())).status).toBe(200);

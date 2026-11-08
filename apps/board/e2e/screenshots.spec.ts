@@ -58,7 +58,7 @@ test("README screenshots", async ({ page }) => {
   await shot(page, "reports.png");
   await report.getByTestId("report-format-html").click();
   const frame = report.getByTestId("report-frame");
-  await expect(frame).toHaveAttribute("sandbox", "");
+  await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
   await expect(page.frameLocator('[data-testid="report-frame"]').getByText("invoices on time")).toBeVisible();
   await report.getByRole("link", { name: "phase 1 report" }).waitFor({ state: "detached" });
   await report.getByTestId("report-format-md").click();

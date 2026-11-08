@@ -279,10 +279,10 @@ lists). Raw HTML inside the markdown is not rendered.
   file in the initiative folder opens that file on the forge. `https:` and `mailto:` links open in a new tab. Other
   links show as plain text.
 
-HTML twins render statically in a sandboxed frame: no scripts, no forms, no pop-ups, no access to the board, and no
-network requests (styles must be inline, images `data:` URIs). Interactive HTML reports (charts drawn by JavaScript,
-tabs, filters) therefore show only their static content; read the markdown twin or open the raw file instead. There
-is no switch to allow scripts.
+HTML twins render in a sandboxed frame: inline scripts and styles may run, forms and pop-ups may not, the document
+cannot access the board, and there are no network requests (images must be `data:` URIs). That is enough for a
+self-contained HTML report to fill tables, filters and charts. The frame is `allow-scripts` only — never
+`allow-same-origin` — because the file is served from the board origin.
 
 ### Report endpoint
 
@@ -293,7 +293,7 @@ from the clone at the tip of the initiative's source branch. The blob is fetched
 | Request | Answer |
 | --- | --- |
 | A listed `.md` report | `text/plain; charset=utf-8` |
-| A listed `.html` report | `text/html; charset=utf-8` with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'self'` |
+| A listed `.html` report | `text/html; charset=utf-8` with `Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; sandbox allow-scripts; frame-ancestors 'self'` |
 | A PNG, JPEG, WebP or GIF below `reports/` | Its image type, by magic bytes (SVG refused), at most 5 MB |
 | Anything else, a report over 2 MB, a symlink, a path outside `reports/` | `404` |
 
@@ -354,7 +354,7 @@ branch (or the `?ref=` branch view). `.../docs/reports/<file>` serves reports wi
 | Request | Answer |
 | --- | --- |
 | A listed `.md` document | `text/plain; charset=utf-8` |
-| A listed `.html` document | `text/html; charset=utf-8` with the report HTML CSP (`sandbox`, no scripts, no network) |
+| A listed `.html` document | `text/html; charset=utf-8` with the report HTML CSP (`sandbox allow-scripts`, inline scripts only, no network) |
 | A PNG, JPEG, WebP or GIF in the folder (at most 4 segments, strict names) | Its image type, by magic bytes, at most 5 MB |
 | `initiative.md`, an unlisted path, a file over 2 MB, a symlink, an encoded `/`, `..` | `404` |
 
